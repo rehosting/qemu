@@ -192,6 +192,9 @@ static const char *log_file;
 static bool list_data_dirs;
 static const char *qtest_chrdev;
 static const char *qtest_log;
+static kvm_penguin_after_guest_init_cb_t kvm_penguin_after_guest_init_cb;
+static void *kvm_penguin_after_guest_init_opaque;
+static bool kvm_penguin_after_guest_init_called;
 
 static int has_defaults = 1;
 static int default_audio = 1;
@@ -203,6 +206,39 @@ static int default_cdrom = 1;
 static bool auto_create_sdcard = true;
 static int default_vga = 1;
 static int default_net = 1;
+
+void __attribute__((visibility("default")))
+set_kvm_penguin_after_guest_init_callback(
+    kvm_penguin_after_guest_init_cb_t cb, void *opaque)
+{
+    kvm_penguin_after_guest_init_cb = cb;
+    kvm_penguin_after_guest_init_opaque = opaque;
+}
+
+static void kvm_penguin_run_after_guest_init_callback(void)
+{
+    int ret;
+
+    if (!kvm_penguin_after_guest_init_cb ||
+        kvm_penguin_after_guest_init_called) {
+        return;
+    }
+
+    kvm_penguin_after_guest_init_called = true;
+
+    /*
+     * This hook runs after board and CLI device construction, but before
+     * qemu_machine_creation_done() closes the normal machine construction
+     * window.  Hold BQL so embedders can safely mutate QEMU global state.
+     */
+    BQL_LOCK_GUARD();
+    ret = kvm_penguin_after_guest_init_cb(current_machine,
+                                          kvm_penguin_after_guest_init_opaque);
+    if (ret) {
+        error_report("Penguin after guest init callback failed: %d", ret);
+        exit(1);
+    }
+}
 
 static const struct {
     const char *driver;
@@ -2809,6 +2845,7 @@ void qmp_x_exit_preconfig(Error **errp)
 
     qemu_init_board();
     qemu_create_cli_devices();
+    kvm_penguin_run_after_guest_init_callback();
     if (!qemu_machine_creation_done(errp)) {
         return;
     }

@@ -4,6 +4,7 @@
 
 #include "qemu/timer.h"
 #include "qemu/notify.h"
+#include "qemu/typedefs.h"
 #include "qemu/uuid.h"
 
 /* vl.c */
@@ -21,6 +22,11 @@ void qemu_remove_exit_notifier(Notifier *notify);
 
 void qemu_add_machine_init_done_notifier(Notifier *notify);
 void qemu_remove_machine_init_done_notifier(Notifier *notify);
+
+typedef int (*kvm_penguin_after_guest_init_cb_t)(MachineState *machine,
+                                                 void *opaque);
+void set_kvm_penguin_after_guest_init_callback(
+    kvm_penguin_after_guest_init_cb_t cb, void *opaque);
 
 void configure_rtc(QemuOpts *opts);
 
