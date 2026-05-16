@@ -182,3 +182,5 @@ if [ -n "$kvm_targets" ]; then
         --build-dir build-kvm \
         --targets "$kvm_targets"
 fi
+
+python3 scripts/penguin-qemu-package.py --output penguin-qemu.tar.gz

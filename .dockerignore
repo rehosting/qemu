@@ -1,0 +1,9 @@
+.git
+.github
+build
+build-kvm
+build-system
+penguin-qemu.tar.gz
+*.pyc
+.cache
+.vscode

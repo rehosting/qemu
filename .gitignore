@@ -2,6 +2,7 @@
 /build/
 /build-kvm/
 /build-system/
+/penguin-qemu.tar.gz
 /.cache/
 /.vscode/
 *.pyc
