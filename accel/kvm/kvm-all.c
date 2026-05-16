@@ -3521,12 +3521,16 @@ int kvm_cpu_exec(CPUState *cpu)
         switch (run->exit_reason) {
         case KVM_EXIT_IO:
             /* Called outside BQL */
-            kvm_handle_io(run->io.port, attrs,
-                          (uint8_t *)run + run->io.data_offset,
-                          run->io.direction,
-                          run->io.size,
-                          run->io.count);
-            ret = 0;
+            if (run->io.port == 0x88 && run->io.direction == KVM_EXIT_IO_OUT) {
+                ret = kvm_arch_handle_exit(cpu, run);
+            } else {
+                kvm_handle_io(run->io.port, attrs,
+                              (uint8_t *)run + run->io.data_offset,
+                              run->io.direction,
+                              run->io.size,
+                              run->io.count);
+                ret = 0;
+            }
             break;
         case KVM_EXIT_MMIO:
             /* Called outside BQL */

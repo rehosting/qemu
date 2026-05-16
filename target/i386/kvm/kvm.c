@@ -6577,6 +6577,49 @@ int kvm_arch_handle_exit(CPUState *cs, struct kvm_run *run)
     KVMState *state;
 
     switch (run->exit_reason) {
+    case KVM_EXIT_IO:
+        if (run->io.port == 0x88 && run->io.direction == KVM_EXIT_IO_OUT) {
+            uint64_t nr = 0;
+
+            if (run->io.size == 4) {
+                nr = *(uint32_t *)((uint8_t *)run + run->io.data_offset);
+            }
+
+            if (kvm_penguin_hypercall_cb) {
+                CPUX86State *env;
+                uint64_t ret_val = 0;
+
+                kvm_cpu_synchronize_state(cs);
+                env = &X86_CPU(cs)->env;
+#ifdef TARGET_X86_64
+                kvm_penguin_hypercall_cb(cs, nr,
+                                         env->regs[R_EDI],
+                                         env->regs[R_ESI],
+                                         env->regs[R_EDX],
+                                         env->regs[R_R10],
+                                         env->regs[R_R8],
+                                         env->regs[R_R9],
+                                         &ret_val);
+                env->regs[R_EAX] = ret_val;
+#else
+                kvm_penguin_hypercall_cb(cs, nr,
+                                         env->regs[R_EBX],
+                                         env->regs[R_ECX],
+                                         env->regs[R_EDX],
+                                         env->regs[R_ESI],
+                                         env->regs[R_EDI],
+                                         env->regs[R_EBP],
+                                         &ret_val);
+                env->regs[R_EAX] = (uint32_t)ret_val;
+#endif
+                cs->vcpu_dirty = true;
+            }
+
+            ret = 0;
+        } else {
+            ret = -1;
+        }
+        break;
     case KVM_EXIT_HLT:
         DPRINTF("handle_hlt\n");
         bql_lock();
