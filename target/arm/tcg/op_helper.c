@@ -25,6 +25,7 @@
 #include "cpu-features.h"
 #include "accel/tcg/probe.h"
 #include "cpregs.h"
+#include "system/penguin.h"
 
 #define SIGNBIT (uint32_t)0x80000000
 #define SIGNBIT64 ((uint64_t)1 << 63)
@@ -81,6 +82,28 @@ void raise_exception_ra(CPUARMState *env, uint32_t excp, uint64_t syndrome,
      */
     cpu_restore_state(cs, ra);
     raise_exception(env, excp, syndrome, target_el);
+}
+
+void HELPER(penguin_guest_hypercall)(CPUARMState *env)
+{
+    CPUState *cs = env_cpu(env);
+    uint64_t ret = 0;
+
+    if (is_a64(env)) {
+        if (penguin_handle_guest_hypercall(cs, env->xregs[8],
+                                           env->xregs[0], env->xregs[1],
+                                           env->xregs[2], env->xregs[3],
+                                           env->xregs[4], env->xregs[5],
+                                           &ret)) {
+            env->xregs[0] = ret;
+        }
+    } else if (penguin_handle_guest_hypercall(cs, env->regs[7],
+                                              env->regs[0], env->regs[1],
+                                              env->regs[2], env->regs[3],
+                                              env->regs[4], env->regs[5],
+                                              &ret)) {
+        env->regs[0] = (uint32_t)ret;
+    }
 }
 
 uint64_t HELPER(neon_tbl)(CPUARMState *env, uint32_t desc,

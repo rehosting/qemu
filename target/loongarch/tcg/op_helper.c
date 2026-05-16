@@ -15,11 +15,26 @@
 #include "qemu/crc32c.h"
 #include <zlib.h> /* for crc32 */
 #include "cpu-csr.h"
+#include "system/penguin.h"
 
 /* Exceptions helpers */
 void helper_raise_exception(CPULoongArchState *env, uint32_t exception)
 {
     do_raise_exception(env, exception, GETPC());
+}
+
+void helper_penguin_guest_hypercall(CPULoongArchState *env)
+{
+    CPUState *cs = env_cpu(env);
+    uint64_t ret = 0;
+
+    if (penguin_handle_guest_hypercall(cs, env->gpr[11],
+                                       env->gpr[4], env->gpr[5],
+                                       env->gpr[6], env->gpr[7],
+                                       env->gpr[8], env->gpr[9],
+                                       &ret)) {
+        env->gpr[4] = ret;
+    }
 }
 
 target_ulong helper_bitrev_w(target_ulong rj)

@@ -59,6 +59,7 @@ DEF_HELPER_2(wfit, void, env, i32)
 DEF_HELPER_1(yield, void, env)
 DEF_HELPER_1(pre_hvc, void, env)
 DEF_HELPER_2(pre_smc, void, env, i32)
+DEF_HELPER_1(penguin_guest_hypercall, void, env)
 DEF_HELPER_1(vesb, void, env)
 DEF_HELPER_1(sev, void, env)
 

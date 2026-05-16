@@ -2345,6 +2345,12 @@ static bool valid_cp(DisasContext *s, int cp)
 
 static bool trans_MCR(DisasContext *s, arg_MCR *a)
 {
+    if (a->cp == 7 && a->opc1 == 0 && a->rt == 0 &&
+        a->crn == 0 && a->crm == 0 && a->opc2 == 0) {
+        gen_helper_penguin_guest_hypercall(tcg_env);
+        return true;
+    }
+
     if (!valid_cp(s, a->cp)) {
         return false;
     }

@@ -27,6 +27,7 @@
 #include "exec/helper-proto.h"
 #include "exec/tlb-flags.h"
 #include "trace.h"
+#include "system/penguin.h"
 
 /* Exceptions processing helpers */
 G_NORETURN void riscv_raise_exception(CPURISCVState *env,
@@ -46,6 +47,20 @@ G_NORETURN void riscv_raise_exception(CPURISCVState *env,
 void helper_raise_exception(CPURISCVState *env, uint32_t exception)
 {
     riscv_raise_exception(env, exception, 0);
+}
+
+void helper_penguin_guest_hypercall(CPURISCVState *env)
+{
+    CPUState *cs = env_cpu(env);
+    uint64_t ret = 0;
+
+    if (penguin_handle_guest_hypercall(cs, env->gpr[17],
+                                       env->gpr[10], env->gpr[11],
+                                       env->gpr[12], env->gpr[13],
+                                       env->gpr[14], env->gpr[15],
+                                       &ret)) {
+        env->gpr[10] = ret;
+    }
 }
 
 target_ulong helper_csrr(CPURISCVState *env, int csr)

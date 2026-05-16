@@ -880,6 +880,9 @@ static bool do_ori(DisasContext *ctx, arg_D_ui *a, bool shift)
 static bool do_xori(DisasContext *ctx, arg_D_ui *a, bool shift)
 {
     if (a->rt == a->ra && a->ui == 0) {
+        if (!shift && a->rt == 10) {
+            gen_helper_penguin_guest_hypercall(tcg_env);
+        }
         /* NOP */
         return true;
     }

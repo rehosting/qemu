@@ -25,6 +25,7 @@
 #include "exec/memop.h"
 #include "fpu_helper.h"
 #include "qemu/crc32c.h"
+#include "system/penguin.h"
 #include <zlib.h>
 
 static inline target_ulong bitswap(target_ulong v)
@@ -48,6 +49,19 @@ target_ulong helper_dbitswap(target_ulong rt)
 target_ulong helper_bitswap(target_ulong rt)
 {
     return (int32_t)bitswap(rt);
+}
+
+void helper_penguin_guest_hypercall(CPUMIPSState *env)
+{
+    CPUState *cs = env_cpu(env);
+    target_ulong *gpr = env->active_tc.gpr;
+    uint64_t ret = 0;
+
+    if (penguin_handle_guest_hypercall(cs, gpr[2],
+                                       gpr[4], gpr[5], gpr[6],
+                                       gpr[7], 0, 0, &ret)) {
+        gpr[2] = ret;
+    }
 }
 
 target_ulong helper_rotx(target_ulong rs, uint32_t shift, uint32_t shiftx,

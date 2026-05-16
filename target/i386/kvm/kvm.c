@@ -31,6 +31,7 @@
 #include "host-cpu.h"
 #include "vmsr_energy.h"
 #include "system/system.h"
+#include "system/penguin.h"
 #include "system/hw_accel.h"
 #include "system/kvm_int.h"
 #include "system/runstate.h"
@@ -72,20 +73,6 @@
 #include "trace.h"
 
 #include CONFIG_DEVICES
-
-typedef int (*kvm_penguin_hypercall_cb_t)(CPUState *cs, uint64_t nr,
-                                          uint64_t a0, uint64_t a1,
-                                          uint64_t a2, uint64_t a3,
-                                          uint64_t a4, uint64_t a5,
-                                          uint64_t *ret);
-static kvm_penguin_hypercall_cb_t kvm_penguin_hypercall_cb;
-
-void set_kvm_penguin_hypercall_callback(kvm_penguin_hypercall_cb_t cb);
-void __attribute__((visibility("default")))
-set_kvm_penguin_hypercall_callback(kvm_penguin_hypercall_cb_t cb)
-{
-    kvm_penguin_hypercall_cb = cb;
-}
 
 //#define DEBUG_KVM
 
@@ -6549,18 +6536,17 @@ static int kvm_handle_hypercall(X86CPU *cpu, struct kvm_run *run)
         return kvm_handle_hc_map_gpa_range(cpu, run);
     }
 
-    if (kvm_penguin_hypercall_cb) {
-        uint64_t ret_val = 0;
-        int ret = kvm_penguin_hypercall_cb(CPU(cpu), run->hypercall.nr,
-                                           run->hypercall.args[0],
-                                           run->hypercall.args[1],
-                                           run->hypercall.args[2],
-                                           run->hypercall.args[3],
-                                           run->hypercall.args[4],
-                                           run->hypercall.args[5],
-                                           &ret_val);
+    uint64_t ret_val = 0;
+    if (penguin_handle_guest_hypercall(CPU(cpu), run->hypercall.nr,
+                                       run->hypercall.args[0],
+                                       run->hypercall.args[1],
+                                       run->hypercall.args[2],
+                                       run->hypercall.args[3],
+                                       run->hypercall.args[4],
+                                       run->hypercall.args[5],
+                                       &ret_val)) {
         run->hypercall.ret = ret_val;
-        return ret;
+        return 0;
     }
 
     return -EINVAL;
@@ -6585,35 +6571,36 @@ int kvm_arch_handle_exit(CPUState *cs, struct kvm_run *run)
                 nr = *(uint32_t *)((uint8_t *)run + run->io.data_offset);
             }
 
-            if (kvm_penguin_hypercall_cb) {
-                CPUX86State *env;
-                uint64_t ret_val = 0;
+            CPUX86State *env;
+            uint64_t ret_val = 0;
 
-                kvm_cpu_synchronize_state(cs);
-                env = &X86_CPU(cs)->env;
+            kvm_cpu_synchronize_state(cs);
+            env = &X86_CPU(cs)->env;
 #ifdef TARGET_X86_64
-                kvm_penguin_hypercall_cb(cs, nr,
-                                         env->regs[R_EDI],
-                                         env->regs[R_ESI],
-                                         env->regs[R_EDX],
-                                         env->regs[R_R10],
-                                         env->regs[R_R8],
-                                         env->regs[R_R9],
-                                         &ret_val);
+            if (penguin_handle_guest_hypercall(cs, nr,
+                                               env->regs[R_EDI],
+                                               env->regs[R_ESI],
+                                               env->regs[R_EDX],
+                                               env->regs[R_R10],
+                                               env->regs[R_R8],
+                                               env->regs[R_R9],
+                                               &ret_val)) {
                 env->regs[R_EAX] = ret_val;
-#else
-                kvm_penguin_hypercall_cb(cs, nr,
-                                         env->regs[R_EBX],
-                                         env->regs[R_ECX],
-                                         env->regs[R_EDX],
-                                         env->regs[R_ESI],
-                                         env->regs[R_EDI],
-                                         env->regs[R_EBP],
-                                         &ret_val);
-                env->regs[R_EAX] = (uint32_t)ret_val;
-#endif
                 cs->vcpu_dirty = true;
             }
+#else
+            if (penguin_handle_guest_hypercall(cs, nr,
+                                               env->regs[R_EBX],
+                                               env->regs[R_ECX],
+                                               env->regs[R_EDX],
+                                               env->regs[R_ESI],
+                                               env->regs[R_EDI],
+                                               env->regs[R_EBP],
+                                               &ret_val)) {
+                env->regs[R_EAX] = (uint32_t)ret_val;
+                cs->vcpu_dirty = true;
+            }
+#endif
 
             ret = 0;
         } else {

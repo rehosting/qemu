@@ -16,6 +16,7 @@ system_ss.add(files(
   'ram-block-attributes.c',
   'memory_mapping.c',
   'memory.c',
+  'penguin.c',
   'physmem.c',
   'qdev-monitor.c',
   'qtest.c',

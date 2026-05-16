@@ -4479,7 +4479,29 @@ foreach target : target_dirs
                link_args: link_args,
                win_subsystem: exe['win_subsystem'])
 
-    if target.endswith('-softmmu')
+    if target.endswith('-softmmu') and 'CONFIG_TCG' in config_target
+      penguin_system_names = {
+        'x86_64': ['x86_64', 'intel64'],
+        'arm': ['arm', 'armel'],
+        'mips': ['mips', 'mipseb'],
+        'mips64': ['mips64', 'mips64eb'],
+        'ppc': ['ppc', 'powerpc'],
+        'ppc64': ['ppc64', 'powerpc64', 'powerpc64le'],
+      }.get(target_name, [target_name])
+
+      foreach penguin_system_name: penguin_system_names
+        shared_library('libqemu-system-' + penguin_system_name, exe['sources'],
+                   install: true,
+                   name_prefix: '',
+                   c_args: c_args,
+                   dependencies: arch_deps + exe['dependencies'],
+                   objects: lib.extract_all_objects(recursive: true),
+                   link_depends: [block_syms, qemu_syms],
+                   link_args: link_args)
+      endforeach
+    endif
+
+    if target.endswith('-softmmu') and 'CONFIG_KVM' in config_target and target_name in ['x86_64', 'aarch64']
       shared_library('qemu-kvm-' + target_name, exe['sources'],
                  install: true,
                  c_args: c_args,

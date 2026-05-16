@@ -42,6 +42,7 @@
 #include "hw/acpi/ghes.h"
 #include "target/arm/gtimer.h"
 #include "migration/blocker.h"
+#include "system/penguin.h"
 
 const KVMCapabilityInfo kvm_arch_required_capabilities[] = {
     KVM_CAP_INFO(DEVICE_CTRL),
@@ -628,6 +629,15 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
             /* Set status for supporting the external dabt injection */
             cap_has_inject_ext_dabt = kvm_check_extension(s,
                                     KVM_CAP_ARM_INJECT_EXT_DABT);
+        }
+    }
+
+    if (kvm_check_extension(s, KVM_CAP_EXIT_HYPERCALL)) {
+        ret = kvm_vm_enable_cap(s, KVM_CAP_EXIT_HYPERCALL, 0, 1);
+        if (ret < 0) {
+            warn_report("kvm: failed to enable KVM_CAP_EXIT_HYPERCALL: %s",
+                        strerror(-ret));
+            ret = 0;
         }
     }
 
@@ -1549,6 +1559,16 @@ int kvm_arch_handle_exit(CPUState *cs, struct kvm_run *run)
     int ret = 0;
 
     switch (run->exit_reason) {
+    case KVM_EXIT_HYPERCALL:
+        penguin_handle_guest_hypercall(cs, run->hypercall.nr,
+                                       run->hypercall.args[0],
+                                       run->hypercall.args[1],
+                                       run->hypercall.args[2],
+                                       run->hypercall.args[3],
+                                       run->hypercall.args[4],
+                                       run->hypercall.args[5],
+                                       &run->hypercall.ret);
+        break;
     case KVM_EXIT_DEBUG:
         if (kvm_arm_handle_debug(cpu, &run->debug.arch)) {
             ret = EXCP_DEBUG;

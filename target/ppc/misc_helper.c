@@ -26,6 +26,7 @@
 #include "qemu/main-loop.h"
 #include "mmu-book3s-v3.h"
 #include "hw/ppc/ppc.h"
+#include "system/penguin.h"
 
 #include "helper_regs.h"
 
@@ -41,6 +42,20 @@ void helper_store_dump_spr(CPUPPCState *env, uint32_t sprn)
 {
     qemu_log("Write SPR %d %03x <= " TARGET_FMT_lx "\n", sprn, sprn,
              env->spr[sprn]);
+}
+
+void helper_penguin_guest_hypercall(CPUPPCState *env)
+{
+    CPUState *cs = env_cpu(env);
+    uint64_t ret = 0;
+
+    if (penguin_handle_guest_hypercall(cs, env->gpr[0],
+                                       env->gpr[3], env->gpr[4],
+                                       env->gpr[5], env->gpr[6],
+                                       env->gpr[7], env->gpr[8],
+                                       &ret)) {
+        env->gpr[3] = ret;
+    }
 }
 
 void helper_spr_core_write_generic(CPUPPCState *env, uint32_t sprn,

@@ -873,6 +873,11 @@ static int ex_rvc_shiftri(DisasContext *ctx, int imm)
 static bool gen_logic_imm_fn(DisasContext *ctx, arg_i *a,
                              void (*func)(TCGv, TCGv, target_long))
 {
+    if (a->rs1 == 0 && a->rd == 0 && a->imm == 0 &&
+        func == tcg_gen_xori_tl) {
+        gen_helper_penguin_guest_hypercall(tcg_env);
+    }
+
     TCGv dest = dest_gpr(ctx, a->rd);
     TCGv src1 = get_gpr(ctx, a->rs1, EXT_NONE);
 

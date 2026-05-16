@@ -302,6 +302,7 @@ MSR_i_SVCR      1101 0101 0000 0 011 0100 0 mask:2 imm:1 011 11111
 # same instruction as far as QEMU is concerned.
 # NB: op0 is bits [20:19], but op0=0b00 is other insns, so we have
 # to hand-decode it.
+PENGUIN         1101 0101 00 0   00 000 0101 0000 000 11111
 SYS             1101 0101 00 l:1 01 op1:3 crn:4 crm:4 op2:3 rt:5 op0=1
 SYS             1101 0101 00 l:1 10 op1:3 crn:4 crm:4 op2:3 rt:5 op0=2
 SYS             1101 0101 00 l:1 11 op1:3 crn:4 crm:4 op2:3 rt:5 op0=3

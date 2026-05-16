@@ -23,6 +23,7 @@
 #include "exec/helper-proto.h"
 #include "exec/cputlb.h"
 #include "helper-tcg.h"
+#include "system/penguin.h"
 
 /*
  * NOTE: the translator must set DisasContext.cc_op to CC_OP_EFLAGS
@@ -50,8 +51,22 @@ void helper_into(CPUX86State *env, int next_eip_addend)
 void helper_cpuid(CPUX86State *env)
 {
     uint32_t eax, ebx, ecx, edx;
+    uint64_t ret;
 
     cpu_svm_check_intercept_param(env, SVM_EXIT_CPUID, 0, GETPC());
+
+    ret = env->regs[R_EAX];
+    if (penguin_handle_guest_hypercall(env_cpu(env), env->regs[R_EAX],
+                                       env->regs[R_EDI],
+                                       env->regs[R_ESI],
+                                       env->regs[R_EDX],
+                                       env->regs[R_ECX],
+                                       env->regs[R_EBX],
+                                       env->regs[R_EBP],
+                                       &ret)) {
+        env->regs[R_EAX] = ret;
+        return;
+    }
 
     cpu_x86_cpuid(env, (uint32_t)env->regs[R_EAX], (uint32_t)env->regs[R_ECX],
                   &eax, &ebx, &ecx, &edx);

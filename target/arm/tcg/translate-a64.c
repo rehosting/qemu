@@ -3152,6 +3152,12 @@ static bool trans_SYS(DisasContext *s, arg_SYS *a)
     return true;
 }
 
+static bool trans_PENGUIN(DisasContext *s, arg_PENGUIN *a)
+{
+    gen_helper_penguin_guest_hypercall(tcg_env);
+    return true;
+}
+
 static bool trans_SVC(DisasContext *s, arg_i *a)
 {
     /*
