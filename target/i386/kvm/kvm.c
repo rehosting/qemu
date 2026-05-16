@@ -73,6 +73,20 @@
 
 #include CONFIG_DEVICES
 
+typedef int (*kvm_penguin_hypercall_cb_t)(CPUState *cs, uint64_t nr,
+                                          uint64_t a0, uint64_t a1,
+                                          uint64_t a2, uint64_t a3,
+                                          uint64_t a4, uint64_t a5,
+                                          uint64_t *ret);
+static kvm_penguin_hypercall_cb_t kvm_penguin_hypercall_cb;
+
+void set_kvm_penguin_hypercall_callback(kvm_penguin_hypercall_cb_t cb);
+void __attribute__((visibility("default")))
+set_kvm_penguin_hypercall_callback(kvm_penguin_hypercall_cb_t cb)
+{
+    kvm_penguin_hypercall_cb = cb;
+}
+
 //#define DEBUG_KVM
 
 #ifdef DEBUG_KVM
@@ -3499,6 +3513,19 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
         return ret;
     }
 
+    if (kvm_check_extension(s, KVM_CAP_EXIT_HYPERCALL)) {
+        ret = kvm_vm_enable_cap(s, KVM_CAP_EXIT_HYPERCALL, 0, 1);
+        if (ret < 0) {
+            warn_report("kvm: failed to enable KVM_CAP_EXIT_HYPERCALL "
+                        "(mask 1): %s", strerror(-ret));
+            ret = kvm_vm_enable_cap(s, KVM_CAP_EXIT_HYPERCALL, 0, 0);
+            if (ret < 0) {
+                warn_report("kvm: failed to enable KVM_CAP_EXIT_HYPERCALL "
+                            "(mask 0): %s", strerror(-ret));
+            }
+        }
+    }
+
     uname(&utsname);
     lm_capable_kernel = strcmp(utsname.machine, "x86_64") == 0;
 
@@ -6518,8 +6545,23 @@ static int kvm_handle_hc_map_gpa_range(X86CPU *cpu, struct kvm_run *run)
 
 static int kvm_handle_hypercall(X86CPU *cpu, struct kvm_run *run)
 {
-    if (run->hypercall.nr == KVM_HC_MAP_GPA_RANGE)
+    if (run->hypercall.nr == KVM_HC_MAP_GPA_RANGE) {
         return kvm_handle_hc_map_gpa_range(cpu, run);
+    }
+
+    if (kvm_penguin_hypercall_cb) {
+        uint64_t ret_val = 0;
+        int ret = kvm_penguin_hypercall_cb(CPU(cpu), run->hypercall.nr,
+                                           run->hypercall.args[0],
+                                           run->hypercall.args[1],
+                                           run->hypercall.args[2],
+                                           run->hypercall.args[3],
+                                           run->hypercall.args[4],
+                                           run->hypercall.args[5],
+                                           &ret_val);
+        run->hypercall.ret = ret_val;
+        return ret;
+    }
 
     return -EINVAL;
 }
