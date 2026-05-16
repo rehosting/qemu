@@ -148,6 +148,10 @@ configure_build_dir build-system \
 
 mapfile -t system_libs < <(build_system_lib_list)
 ninja -C build-system "${system_libs[@]}"
+python3 scripts/penguin-cffi-gen.py \
+    --mode system \
+    --build-dir build-system \
+    --arches "$PENGUIN_SYSTEM_ARCHES"
 
 if [ -n "${PENGUIN_KVM_TARGETS:-}" ]; then
     kvm_targets="$PENGUIN_KVM_TARGETS"
@@ -173,4 +177,8 @@ if [ -n "$kvm_targets" ]; then
 
     mapfile -t kvm_libs < <(targets_to_kvm_libs "$kvm_targets")
     ninja -C build-kvm "${kvm_libs[@]}"
+    python3 scripts/penguin-cffi-gen.py \
+        --mode kvm \
+        --build-dir build-kvm \
+        --targets "$kvm_targets"
 fi
