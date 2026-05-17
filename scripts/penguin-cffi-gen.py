@@ -74,6 +74,10 @@ typedef int (*kvm_penguin_hypercall_cb_t)(CPUState *cs, uint64_t nr,
 
 typedef int (*kvm_penguin_after_guest_init_cb_t)(MachineState *machine,
                                                  void *opaque);
+typedef uint64_t (*penguin_mmio_read_cb_t)(uint64_t addr, unsigned size,
+                                           void *opaque);
+typedef void (*penguin_mmio_write_cb_t)(uint64_t addr, uint64_t data,
+                                        unsigned size, void *opaque);
 
 extern MachineState *current_machine;
 extern int (*qemu_main)(void);
@@ -105,6 +109,11 @@ bool penguin_handle_guest_hypercall(CPUState *cs, uint64_t nr,
                                     uint64_t a2, uint64_t a3,
                                     uint64_t a4, uint64_t a5,
                                     uint64_t *ret);
+int penguin_qemu_add_mmio_region(uint64_t base, uint64_t size,
+                                 const char *name,
+                                 penguin_mmio_read_cb_t read_cb,
+                                 penguin_mmio_write_cb_t write_cb,
+                                 void *opaque);
 """
 
 
