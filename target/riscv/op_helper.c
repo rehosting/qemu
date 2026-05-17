@@ -49,18 +49,18 @@ void helper_raise_exception(CPURISCVState *env, uint32_t exception)
     riscv_raise_exception(env, exception, 0);
 }
 
-void helper_penguin_guest_hypercall(CPURISCVState *env)
+target_ulong helper_penguin_guest_hypercall(CPURISCVState *env, target_ulong nr,
+                                            target_ulong a0, target_ulong a1,
+                                            target_ulong a2, target_ulong a3,
+                                            target_ulong a4)
 {
     CPUState *cs = env_cpu(env);
     uint64_t ret = 0;
 
-    if (penguin_handle_guest_hypercall(cs, env->gpr[17],
-                                       env->gpr[10], env->gpr[11],
-                                       env->gpr[12], env->gpr[13],
-                                       env->gpr[14], env->gpr[15],
-                                       &ret)) {
-        env->gpr[10] = ret;
+    if (penguin_handle_guest_hypercall(cs, nr, a0, a1, a2, a3, a4, 0, &ret)) {
+        return ret;
     }
+    return 0;
 }
 
 target_ulong helper_csrr(CPURISCVState *env, int csr)

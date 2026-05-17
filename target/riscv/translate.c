@@ -875,7 +875,13 @@ static bool gen_logic_imm_fn(DisasContext *ctx, arg_i *a,
 {
     if (a->rs1 == 0 && a->rd == 0 && a->imm == 0 &&
         func == tcg_gen_xori_tl) {
-        gen_helper_penguin_guest_hypercall(tcg_env);
+        TCGv ret = tcg_temp_new();
+        gen_helper_penguin_guest_hypercall(ret, tcg_env,
+                                           cpu_gpr[17], cpu_gpr[10],
+                                           cpu_gpr[11], cpu_gpr[12],
+                                           cpu_gpr[13], cpu_gpr[14]);
+        gen_set_gpr(ctx, 10, ret);
+        return true;
     }
 
     TCGv dest = dest_gpr(ctx, a->rd);

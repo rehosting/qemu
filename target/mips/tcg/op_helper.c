@@ -51,17 +51,18 @@ target_ulong helper_bitswap(target_ulong rt)
     return (int32_t)bitswap(rt);
 }
 
-void helper_penguin_guest_hypercall(CPUMIPSState *env)
+target_ulong helper_penguin_guest_hypercall(CPUMIPSState *env, target_ulong nr,
+                                            target_ulong a0, target_ulong a1,
+                                            target_ulong a2, target_ulong a3,
+                                            target_ulong a4)
 {
     CPUState *cs = env_cpu(env);
-    target_ulong *gpr = env->active_tc.gpr;
     uint64_t ret = 0;
 
-    if (penguin_handle_guest_hypercall(cs, gpr[2],
-                                       gpr[4], gpr[5], gpr[6],
-                                       gpr[7], 0, 0, &ret)) {
-        gpr[2] = ret;
+    if (penguin_handle_guest_hypercall(cs, nr, a0, a1, a2, a3, a4, 0, &ret)) {
+        return ret;
     }
+    return 0;
 }
 
 target_ulong helper_rotx(target_ulong rs, uint32_t shift, uint32_t shiftx,

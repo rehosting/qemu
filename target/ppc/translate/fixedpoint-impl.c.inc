@@ -881,7 +881,10 @@ static bool do_xori(DisasContext *ctx, arg_D_ui *a, bool shift)
 {
     if (a->rt == a->ra && a->ui == 0) {
         if (!shift && a->rt == 10) {
-            gen_helper_penguin_guest_hypercall(tcg_env);
+            gen_helper_penguin_guest_hypercall(cpu_gpr[3], tcg_env,
+                                               cpu_gpr[0], cpu_gpr[3],
+                                               cpu_gpr[4], cpu_gpr[5],
+                                               cpu_gpr[6], cpu_gpr[7]);
         }
         /* NOP */
         return true;

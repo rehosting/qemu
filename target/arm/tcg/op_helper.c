@@ -84,26 +84,18 @@ void raise_exception_ra(CPUARMState *env, uint32_t excp, uint64_t syndrome,
     raise_exception(env, excp, syndrome, target_el);
 }
 
-void HELPER(penguin_guest_hypercall)(CPUARMState *env)
+uint64_t HELPER(penguin_guest_hypercall)(CPUARMState *env, uint64_t nr,
+                                         uint64_t a0, uint64_t a1,
+                                         uint64_t a2, uint64_t a3,
+                                         uint64_t a4)
 {
     CPUState *cs = env_cpu(env);
     uint64_t ret = 0;
 
-    if (is_a64(env)) {
-        if (penguin_handle_guest_hypercall(cs, env->xregs[8],
-                                           env->xregs[0], env->xregs[1],
-                                           env->xregs[2], env->xregs[3],
-                                           env->xregs[4], env->xregs[5],
-                                           &ret)) {
-            env->xregs[0] = ret;
-        }
-    } else if (penguin_handle_guest_hypercall(cs, env->regs[7],
-                                              env->regs[0], env->regs[1],
-                                              env->regs[2], env->regs[3],
-                                              env->regs[4], env->regs[5],
-                                              &ret)) {
-        env->regs[0] = (uint32_t)ret;
+    if (penguin_handle_guest_hypercall(cs, nr, a0, a1, a2, a3, a4, 0, &ret)) {
+        return ret;
     }
+    return 0;
 }
 
 uint64_t HELPER(neon_tbl)(CPUARMState *env, uint32_t desc,

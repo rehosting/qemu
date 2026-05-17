@@ -2723,7 +2723,10 @@ static void gen_cond_move(DisasContext *ctx, uint32_t opc,
     TCGv t0, t1, t2;
 
     if (rd == 0) {
-        gen_helper_penguin_guest_hypercall(tcg_env);
+        gen_helper_penguin_guest_hypercall(cpu_gpr[2], tcg_env,
+                                           cpu_gpr[2], cpu_gpr[4],
+                                           cpu_gpr[5], cpu_gpr[6],
+                                           cpu_gpr[7], tcg_constant_tl(0));
         return;
     }
 
@@ -8519,7 +8522,10 @@ static void gen_cp0(CPUMIPSState *env, DisasContext *ctx, uint32_t opc,
     switch (opc) {
     case OPC_MFC0:
         if (rt == 0) {
-            gen_helper_penguin_guest_hypercall(tcg_env);
+            gen_helper_penguin_guest_hypercall(cpu_gpr[2], tcg_env,
+                                               cpu_gpr[2], cpu_gpr[4],
+                                               cpu_gpr[5], cpu_gpr[6],
+                                               cpu_gpr[7], tcg_constant_tl(0));
             return;
         }
         gen_mfc0(ctx, cpu_gpr[rt], rd, ctx->opcode & 0x7);

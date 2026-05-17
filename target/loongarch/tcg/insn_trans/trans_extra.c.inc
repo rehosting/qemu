@@ -84,7 +84,15 @@ static bool trans_cpucfg(DisasContext *ctx, arg_cpucfg *a)
     gen_helper_cpucfg(dest, tcg_env, src1);
     gen_set_gpr(a->rd, dest, EXT_NONE);
     if (a->rd == 0) {
-        gen_helper_penguin_guest_hypercall(tcg_env);
+        TCGv ret = tcg_temp_new();
+        gen_helper_penguin_guest_hypercall(ret, tcg_env,
+                                           gpr_src(ctx, 11, EXT_NONE),
+                                           gpr_src(ctx, 4, EXT_NONE),
+                                           gpr_src(ctx, 5, EXT_NONE),
+                                           gpr_src(ctx, 6, EXT_NONE),
+                                           gpr_src(ctx, 7, EXT_NONE),
+                                           gpr_src(ctx, 8, EXT_NONE));
+        gen_set_gpr(4, ret, EXT_NONE);
     }
 
     return true;

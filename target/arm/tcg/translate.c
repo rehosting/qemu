@@ -2347,7 +2347,25 @@ static bool trans_MCR(DisasContext *s, arg_MCR *a)
 {
     if (a->cp == 7 && a->opc1 == 0 && a->rt == 0 &&
         a->crn == 0 && a->crm == 0 && a->opc2 == 0) {
-        gen_helper_penguin_guest_hypercall(tcg_env);
+        TCGv_i64 nr = tcg_temp_new_i64();
+        TCGv_i64 a0 = tcg_temp_new_i64();
+        TCGv_i64 a1 = tcg_temp_new_i64();
+        TCGv_i64 a2 = tcg_temp_new_i64();
+        TCGv_i64 a3 = tcg_temp_new_i64();
+        TCGv_i64 a4 = tcg_temp_new_i64();
+        TCGv_i64 ret64 = tcg_temp_new_i64();
+        TCGv_i32 ret = tcg_temp_new_i32();
+
+        tcg_gen_extu_i32_i64(nr, load_reg(s, 7));
+        tcg_gen_extu_i32_i64(a0, load_reg(s, 0));
+        tcg_gen_extu_i32_i64(a1, load_reg(s, 1));
+        tcg_gen_extu_i32_i64(a2, load_reg(s, 2));
+        tcg_gen_extu_i32_i64(a3, load_reg(s, 3));
+        tcg_gen_extu_i32_i64(a4, load_reg(s, 4));
+        gen_helper_penguin_guest_hypercall(ret64, tcg_env, nr, a0, a1, a2,
+                                           a3, a4);
+        tcg_gen_extrl_i64_i32(ret, ret64);
+        store_reg(s, 0, ret);
         return true;
     }
 

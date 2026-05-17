@@ -44,18 +44,18 @@ void helper_store_dump_spr(CPUPPCState *env, uint32_t sprn)
              env->spr[sprn]);
 }
 
-void helper_penguin_guest_hypercall(CPUPPCState *env)
+target_ulong helper_penguin_guest_hypercall(CPUPPCState *env, target_ulong nr,
+                                            target_ulong a0, target_ulong a1,
+                                            target_ulong a2, target_ulong a3,
+                                            target_ulong a4)
 {
     CPUState *cs = env_cpu(env);
     uint64_t ret = 0;
 
-    if (penguin_handle_guest_hypercall(cs, env->gpr[0],
-                                       env->gpr[3], env->gpr[4],
-                                       env->gpr[5], env->gpr[6],
-                                       env->gpr[7], env->gpr[8],
-                                       &ret)) {
-        env->gpr[3] = ret;
+    if (penguin_handle_guest_hypercall(cs, nr, a0, a1, a2, a3, a4, 0, &ret)) {
+        return ret;
     }
+    return 0;
 }
 
 void helper_spr_core_write_generic(CPUPPCState *env, uint32_t sprn,

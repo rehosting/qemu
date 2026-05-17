@@ -3154,7 +3154,10 @@ static bool trans_SYS(DisasContext *s, arg_SYS *a)
 
 static bool trans_PENGUIN(DisasContext *s, arg_PENGUIN *a)
 {
-    gen_helper_penguin_guest_hypercall(tcg_env);
+    gen_helper_penguin_guest_hypercall(cpu_reg(s, 0), tcg_env,
+                                       cpu_reg(s, 8), cpu_reg(s, 0),
+                                       cpu_reg(s, 1), cpu_reg(s, 2),
+                                       cpu_reg(s, 3), cpu_reg(s, 4));
     return true;
 }
 
