@@ -6577,16 +6577,30 @@ int kvm_arch_handle_exit(CPUState *cs, struct kvm_run *run)
             kvm_cpu_synchronize_state(cs);
             env = &X86_CPU(cs)->env;
 #ifdef TARGET_X86_64
-            if (penguin_handle_guest_hypercall(cs, nr,
-                                               env->regs[R_EDI],
-                                               env->regs[R_ESI],
-                                               env->regs[R_EDX],
-                                               env->regs[R_R10],
-                                               env->regs[R_R8],
-                                               env->regs[R_R9],
-                                               &ret_val)) {
-                env->regs[R_EAX] = ret_val;
-                cs->vcpu_dirty = true;
+            if (env->hflags & HF_CS64_MASK) {
+                if (penguin_handle_guest_hypercall(cs, nr,
+                                                   env->regs[R_EDI],
+                                                   env->regs[R_ESI],
+                                                   env->regs[R_EDX],
+                                                   env->regs[R_R10],
+                                                   env->regs[R_R8],
+                                                   env->regs[R_R9],
+                                                   &ret_val)) {
+                    env->regs[R_EAX] = ret_val;
+                    cs->vcpu_dirty = true;
+                }
+            } else {
+                if (penguin_handle_guest_hypercall(cs, nr,
+                                                   env->regs[R_EBX],
+                                                   env->regs[R_ECX],
+                                                   env->regs[R_EDX],
+                                                   env->regs[R_ESI],
+                                                   env->regs[R_EDI],
+                                                   env->regs[R_EBP],
+                                                   &ret_val)) {
+                    env->regs[R_EAX] = (uint32_t)ret_val;
+                    cs->vcpu_dirty = true;
+                }
             }
 #else
             if (penguin_handle_guest_hypercall(cs, nr,

@@ -234,7 +234,7 @@ static void ioport88_write(void *opaque, hwaddr addr, uint64_t data,
     cpu_synchronize_state(cs);
 
 #ifdef TARGET_X86_64
-    if (env->hflags & HF_LMA_MASK) {
+    if (env->hflags & HF_CS64_MASK) {
         if (penguin_handle_guest_hypercall(cs, data,
                                            env->regs[R_EDI],
                                            env->regs[R_ESI],
