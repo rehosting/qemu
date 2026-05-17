@@ -78,9 +78,17 @@ typedef int (*kvm_penguin_after_guest_init_cb_t)(MachineState *machine,
 extern MachineState *current_machine;
 extern int (*qemu_main)(void);
 
+int main(int argc, char **argv);
 void qemu_init(int argc, char **argv);
 int qemu_main_loop(void);
 void qemu_cleanup(int status);
+void qemu_system_shutdown_request(int reason);
+void bql_lock_impl(const char *file, int line);
+void bql_unlock(void);
+void replay_mutex_lock(void);
+void replay_mutex_unlock(void);
+bool bql_locked(void);
+bool replay_mutex_locked(void);
 
 CPUState *qemu_get_cpu(int index);
 int cpu_memory_rw_debug(CPUState *cpu, vaddr addr, void *ptr, size_t len,

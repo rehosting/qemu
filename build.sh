@@ -147,7 +147,7 @@ configure_build_dir build-system \
     --disable-kvm
 
 mapfile -t system_libs < <(build_system_lib_list)
-ninja -C build-system "${system_libs[@]}"
+ninja -C build-system "${system_libs[@]}" qemu-img
 python3 scripts/penguin-cffi-gen.py \
     --mode system \
     --build-dir build-system \

@@ -3,6 +3,8 @@
 # Package Penguin's QEMU shared libraries and generated CFFI declarations.
 
 import argparse
+import bz2
+import io
 import json
 import tarfile
 from pathlib import Path
@@ -19,6 +21,41 @@ def load_manifest(path):
     if not path.exists():
         return []
     return json.loads(path.read_text())["headers"]
+
+
+def add_qemu_img(archive, build_dir, entries):
+    qemu_img = build_dir / "qemu-img"
+    if not qemu_img.exists():
+        raise SystemExit(f"missing built qemu-img: {qemu_img}")
+
+    archive.add(qemu_img, arcname="bin/qemu-img")
+    entries.append("bin/qemu-img")
+
+
+def add_qemu_data(archive, entries):
+    pc_bios = Path("pc-bios")
+    if not pc_bios.exists():
+        raise SystemExit("missing pc-bios directory")
+
+    for path in sorted(pc_bios.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.name == "meson.build":
+            continue
+
+        relative = path.relative_to(pc_bios)
+        if path.suffix == ".bz2":
+            arcname = f"share/qemu/{relative.with_suffix('')}"
+            data = bz2.decompress(path.read_bytes())
+            info = tarfile.TarInfo(arcname)
+            info.size = len(data)
+            info.mode = 0o644
+            archive.addfile(info, io.BytesIO(data))
+        else:
+            arcname = f"share/qemu/{relative}"
+            archive.add(path, arcname=arcname)
+
+        entries.append(arcname)
 
 
 def main():
@@ -41,6 +78,9 @@ def main():
 
     entries = []
     with tarfile.open(output, "w:gz") as archive:
+        add_qemu_img(archive, system_build_dir, entries)
+        add_qemu_data(archive, entries)
+
         for mode, build_dir, manifest_path in manifests:
             if add_file(
                 archive,
