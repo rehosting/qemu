@@ -5,6 +5,7 @@ on:
     branches:
       - master
       - main
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -27,7 +28,6 @@ jobs:
         uses: reecetech/version-increment@2024.10.1
         id: version
         with:
-          tag_prefix: qemu
           release_branch: ${{ github.ref_name }}
           use_api: true
 
@@ -67,15 +67,24 @@ jobs:
             type=registry,ref=${{ secrets.REHOSTING_ARC_REGISTRY }}/rehosting/qemu:cache,mode=max
           outputs: type=local,dest=dist
 
+      - name: Verify release artifact
+        run: |
+          test -s dist/penguin-qemu.tar.gz
+          tar tzf dist/penguin-qemu.tar.gz | grep -q '^lib/libqemu-system-'
+          tar tzf dist/penguin-qemu.tar.gz | grep -q '^include/penguin-qemu-cffi/'
+          tar tzf dist/penguin-qemu.tar.gz | grep -q '^bin/qemu-img$'
+          (cd dist && sha256sum penguin-qemu.tar.gz > SHA256SUMS)
+
       - name: Upload package release
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.version.outputs.prefixed-v-version }}
-          name: Release ${{ steps.version.outputs.prefixed-v-version }}
+          tag_name: ${{ steps.version.outputs.v-version }}
+          name: Release ${{ steps.version.outputs.v-version }}
           draft: false
           generate_release_notes: true
           prerelease: false
           files: |
             dist/penguin-qemu.tar.gz
+            dist/SHA256SUMS
