@@ -32,6 +32,7 @@
 #include "hw/i386/fw_cfg.h"
 #include "hw/i386/vmport.h"
 #include "system/cpus.h"
+#include "system/hw_accel.h"
 #include "hw/ide/ide-bus.h"
 #include "hw/timer/hpet.h"
 #include "hw/core/loader.h"
@@ -41,6 +42,8 @@
 #include "hw/input/i8042.h"
 #include "hw/audio/pcspk.h"
 #include "system/system.h"
+#include "system/penguin.h"
+#include "system/qtest.h"
 #include "system/xen.h"
 #include "system/reset.h"
 #include "kvm/kvm_i386.h"
@@ -212,6 +215,52 @@ static void ioport80_write(void *opaque, hwaddr addr, uint64_t data,
 static uint64_t ioport80_read(void *opaque, hwaddr addr, unsigned size)
 {
     return 0xffffffffffffffffULL;
+}
+
+static void ioport88_write(void *opaque, hwaddr addr, uint64_t data,
+                           unsigned size)
+{
+    CPUState *cs = current_cpu;
+    X86CPU *cpu;
+    CPUX86State *env;
+    uint64_t ret = 0;
+
+    if (!cs || qtest_enabled()) {
+        return;
+    }
+
+    cpu = X86_CPU(cs);
+    env = &cpu->env;
+    cpu_synchronize_state(cs);
+
+#ifdef TARGET_X86_64
+    if (env->hflags & HF_LMA_MASK) {
+        if (penguin_handle_guest_hypercall(cs, data,
+                                           env->regs[R_EDI],
+                                           env->regs[R_ESI],
+                                           env->regs[R_EDX],
+                                           env->regs[R_R10],
+                                           env->regs[R_R8],
+                                           env->regs[R_R9],
+                                           &ret)) {
+            env->regs[R_EAX] = ret;
+            cs->vcpu_dirty = true;
+        }
+        return;
+    }
+#endif
+
+    if (penguin_handle_guest_hypercall(cs, data,
+                                       env->regs[R_EBX],
+                                       env->regs[R_ECX],
+                                       env->regs[R_EDX],
+                                       env->regs[R_ESI],
+                                       env->regs[R_EDI],
+                                       env->regs[R_EBP],
+                                       &ret)) {
+        env->regs[R_EAX] = (uint32_t)ret;
+        cs->vcpu_dirty = true;
+    }
 }
 
 /* MS-DOS compatibility mode FPU exception support */
@@ -971,6 +1020,15 @@ static const MemoryRegionOps ioport80_io_ops = {
     },
 };
 
+static const MemoryRegionOps ioport88_io_ops = {
+    .write = ioport88_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl = {
+        .min_access_size = 4,
+        .max_access_size = 4,
+    },
+};
+
 static const MemoryRegionOps ioportF0_io_ops = {
     .write = ioportF0_write,
     .read = ioportF0_read,
@@ -1048,11 +1106,15 @@ void pc_basic_device_init(struct PCMachineState *pcms,
     qemu_irq pit_alt_irq = NULL;
     ISADevice *pit = NULL;
     MemoryRegion *ioport80_io = g_new(MemoryRegion, 1);
+    MemoryRegion *ioport88_io = g_new(MemoryRegion, 1);
     MemoryRegion *ioportF0_io = g_new(MemoryRegion, 1);
     X86MachineState *x86ms = X86_MACHINE(pcms);
 
     memory_region_init_io(ioport80_io, NULL, &ioport80_io_ops, NULL, "ioport80", 1);
     memory_region_add_subregion(isa_bus->address_space_io, 0x80, ioport80_io);
+
+    memory_region_init_io(ioport88_io, NULL, &ioport88_io_ops, NULL, "penguin-hypercall", 4);
+    memory_region_add_subregion(isa_bus->address_space_io, 0x88, ioport88_io);
 
     memory_region_init_io(ioportF0_io, NULL, &ioportF0_io_ops, NULL, "ioportF0", 1);
     memory_region_add_subregion(isa_bus->address_space_io, 0xf0, ioportF0_io);
