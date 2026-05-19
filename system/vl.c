@@ -230,10 +230,17 @@ static void kvm_penguin_run_after_guest_init_callback(void)
      * This hook runs after board and CLI device construction, but before
      * qemu_machine_creation_done() closes the normal machine construction
      * window.  Hold BQL so embedders can safely mutate QEMU global state.
+     * qemu_init() may already be running with BQL held, so avoid taking it
+     * recursively in debug builds.
      */
-    BQL_LOCK_GUARD();
-    ret = kvm_penguin_after_guest_init_cb(current_machine,
-                                          kvm_penguin_after_guest_init_opaque);
+    if (bql_locked()) {
+        ret = kvm_penguin_after_guest_init_cb(
+            current_machine, kvm_penguin_after_guest_init_opaque);
+    } else {
+        BQL_LOCK_GUARD();
+        ret = kvm_penguin_after_guest_init_cb(
+            current_machine, kvm_penguin_after_guest_init_opaque);
+    }
     if (ret) {
         error_report("Penguin after guest init callback failed: %d", ret);
         exit(1);
