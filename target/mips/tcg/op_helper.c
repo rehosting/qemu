@@ -62,7 +62,7 @@ target_ulong helper_penguin_guest_hypercall(CPUMIPSState *env, target_ulong nr,
     if (penguin_handle_guest_hypercall(cs, nr, a0, a1, a2, a3, a4, 0, &ret)) {
         return ret;
     }
-    return 0;
+    return nr;
 }
 
 target_ulong helper_rotx(target_ulong rs, uint32_t shift, uint32_t shiftx,
