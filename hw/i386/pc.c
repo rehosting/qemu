@@ -225,7 +225,7 @@ static void ioport88_write(void *opaque, hwaddr addr, uint64_t data,
     CPUX86State *env;
     uint64_t ret = 0;
 
-    if (!cs || qtest_enabled()) {
+    if (size != 4 || !cs || qtest_enabled()) {
         return;
     }
 

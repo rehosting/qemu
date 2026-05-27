@@ -6564,12 +6564,12 @@ int kvm_arch_handle_exit(CPUState *cs, struct kvm_run *run)
 
     switch (run->exit_reason) {
     case KVM_EXIT_IO:
-        if (run->io.port == 0x88 && run->io.direction == KVM_EXIT_IO_OUT) {
+        if (run->io.port == 0x88 &&
+            run->io.direction == KVM_EXIT_IO_OUT &&
+            run->io.size == 4) {
             uint64_t nr = 0;
 
-            if (run->io.size == 4) {
-                nr = *(uint32_t *)((uint8_t *)run + run->io.data_offset);
-            }
+            nr = *(uint32_t *)((uint8_t *)run + run->io.data_offset);
 
             CPUX86State *env;
             uint64_t ret_val = 0;
