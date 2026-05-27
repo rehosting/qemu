@@ -95,7 +95,7 @@ uint64_t HELPER(penguin_guest_hypercall)(CPUARMState *env, uint64_t nr,
     if (penguin_handle_guest_hypercall(cs, nr, a0, a1, a2, a3, a4, 0, &ret)) {
         return ret;
     }
-    return 0;
+    return a0;
 }
 
 uint64_t HELPER(neon_tbl)(CPUARMState *env, uint32_t desc,

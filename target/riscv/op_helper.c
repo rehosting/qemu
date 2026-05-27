@@ -60,7 +60,7 @@ target_ulong helper_penguin_guest_hypercall(CPURISCVState *env, target_ulong nr,
     if (penguin_handle_guest_hypercall(cs, nr, a0, a1, a2, a3, a4, 0, &ret)) {
         return ret;
     }
-    return 0;
+    return a0;
 }
 
 target_ulong helper_csrr(CPURISCVState *env, int csr)
