@@ -100,6 +100,10 @@ int cpu_memory_rw_debug(CPUState *cpu, vaddr addr, void *ptr, size_t len,
 
 void set_penguin_guest_hypercall_callback(penguin_guest_hypercall_cb_t cb,
                                           void *opaque);
+void penguin_register_guest_hypercall(uint64_t nr);
+void penguin_unregister_guest_hypercall(uint64_t nr);
+void penguin_clear_guest_hypercalls(void);
+bool penguin_guest_hypercall_registered(uint64_t nr);
 void set_kvm_penguin_hypercall_callback(kvm_penguin_hypercall_cb_t cb);
 void set_kvm_penguin_after_guest_init_callback(
     kvm_penguin_after_guest_init_cb_t cb, void *opaque);

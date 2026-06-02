@@ -28,6 +28,10 @@ typedef void (*penguin_mmio_write_cb_t)(uint64_t addr, uint64_t data,
 
 void set_penguin_guest_hypercall_callback(penguin_guest_hypercall_cb_t cb,
                                           void *opaque);
+void penguin_register_guest_hypercall(uint64_t nr);
+void penguin_unregister_guest_hypercall(uint64_t nr);
+void penguin_clear_guest_hypercalls(void);
+bool penguin_guest_hypercall_registered(uint64_t nr);
 void set_kvm_penguin_hypercall_callback(kvm_penguin_hypercall_cb_t cb);
 
 bool penguin_handle_guest_hypercall(CPUState *cs, uint64_t nr,

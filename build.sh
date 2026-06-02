@@ -122,10 +122,37 @@ build_system_target_list() {
 
 build_system_lib_list() {
     local arch
+    local target
+    local lib
+    local libs=()
 
     IFS=',' read -ra split_arches <<< "$PENGUIN_SYSTEM_ARCHES"
     for arch in "${split_arches[@]}"; do
-        printf "libqemu-system-%s.so\n" "$arch"
+        target="$(penguin_system_arch_to_qemu_target "$arch")"
+        lib="libqemu-system-${target%-softmmu}.so"
+        if append_unique "$lib" "${libs[@]}"; then
+            libs+=("$lib")
+        fi
+    done
+
+    printf "%s\n" "${libs[@]}"
+}
+
+stage_system_lib_aliases() {
+    local arch
+    local target
+    local source
+    local alias
+
+    IFS=',' read -ra split_arches <<< "$PENGUIN_SYSTEM_ARCHES"
+    for arch in "${split_arches[@]}"; do
+        target="$(penguin_system_arch_to_qemu_target "$arch")"
+        source="build-system/libqemu-system-${target%-softmmu}.so"
+        alias="build-system/libqemu-system-${arch}.so"
+
+        if [ "$source" != "$alias" ]; then
+            cp -f "$source" "$alias"
+        fi
     done
 }
 
@@ -148,6 +175,7 @@ configure_build_dir build-system \
 
 mapfile -t system_libs < <(build_system_lib_list)
 ninja -C build-system "${system_libs[@]}" qemu-img
+stage_system_lib_aliases
 python3 scripts/penguin-cffi-gen.py \
     --mode system \
     --build-dir build-system \
