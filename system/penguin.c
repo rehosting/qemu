@@ -15,6 +15,54 @@ typedef struct PenguinMmioRegion {
 static penguin_guest_hypercall_cb_t penguin_guest_hypercall_cb;
 static void *penguin_guest_hypercall_opaque;
 static kvm_penguin_hypercall_cb_t kvm_penguin_hypercall_cb;
+static GHashTable *penguin_guest_hypercall_numbers;
+
+static void penguin_guest_hypercalls_init(void)
+{
+    if (!penguin_guest_hypercall_numbers) {
+        penguin_guest_hypercall_numbers = g_hash_table_new_full(g_int64_hash,
+                                                                g_int64_equal,
+                                                                g_free, NULL);
+    }
+}
+
+void __attribute__((visibility("default")))
+penguin_register_guest_hypercall(uint64_t nr)
+{
+    uint64_t *key;
+
+    penguin_guest_hypercalls_init();
+    if (g_hash_table_contains(penguin_guest_hypercall_numbers, &nr)) {
+        return;
+    }
+
+    key = g_new(uint64_t, 1);
+    *key = nr;
+    g_hash_table_add(penguin_guest_hypercall_numbers, key);
+}
+
+void __attribute__((visibility("default")))
+penguin_unregister_guest_hypercall(uint64_t nr)
+{
+    if (penguin_guest_hypercall_numbers) {
+        g_hash_table_remove(penguin_guest_hypercall_numbers, &nr);
+    }
+}
+
+void __attribute__((visibility("default")))
+penguin_clear_guest_hypercalls(void)
+{
+    if (penguin_guest_hypercall_numbers) {
+        g_hash_table_remove_all(penguin_guest_hypercall_numbers);
+    }
+}
+
+bool __attribute__((visibility("default")))
+penguin_guest_hypercall_registered(uint64_t nr)
+{
+    return penguin_guest_hypercall_numbers &&
+           g_hash_table_contains(penguin_guest_hypercall_numbers, &nr);
+}
 
 void __attribute__((visibility("default")))
 set_penguin_guest_hypercall_callback(penguin_guest_hypercall_cb_t cb,
@@ -36,7 +84,8 @@ bool penguin_handle_guest_hypercall(CPUState *cs, uint64_t nr,
                                     uint64_t a4, uint64_t a5,
                                     uint64_t *ret)
 {
-    if (penguin_guest_hypercall_cb) {
+    if (penguin_guest_hypercall_cb &&
+        penguin_guest_hypercall_registered(nr)) {
         return penguin_guest_hypercall_cb(cs, nr, a0, a1, a2, a3, a4, a5,
                                           ret,
                                           penguin_guest_hypercall_opaque) == 0;
