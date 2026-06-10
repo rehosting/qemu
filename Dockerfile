@@ -26,6 +26,10 @@ RUN apt-get update && \
         zlib1g-dev && \
     rm -rf /var/lib/apt/lists/*
 
+# penguin-env-cffi-gen.py parses the built libraries' DWARF (needs recent
+# pyelftools for DWARF5) and verifies generated layouts with cffi.
+RUN pip3 install --no-cache-dir "pyelftools>=0.31" cffi
+
 COPY --exclude=.git \
      --exclude=.github \
      --exclude=build-system \

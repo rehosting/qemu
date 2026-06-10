@@ -123,6 +123,8 @@ int penguin_read_guest_reg(CPUState *cs, int regnum, uint8_t *buf,
                            int buf_len);
 int penguin_write_guest_reg(CPUState *cs, int regnum, const uint8_t *buf,
                             int len);
+void *penguin_cpu_env(CPUState *cs);
+void penguin_sync_cpu_state(CPUState *cs);
 """
 
 
