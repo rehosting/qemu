@@ -2730,6 +2730,16 @@ static void gen_cond_move(DisasContext *ctx, uint32_t opc,
         return;
     }
 
+    if (rd == 0) {
+        /*
+         * A conditional move into $zero has no architectural effect. cpu_gpr[0]
+         * is NULL on MIPS ($zero is special-cased, never a TCG global), so the
+         * movcond below would hand a NULL TCGv to the code generator. Treat it
+         * as a NOP, as upstream did before the Penguin hypercall hook was added.
+         */
+        return;
+    }
+
     t0 = tcg_temp_new();
     gen_load_gpr(t0, rt);
     t1 = tcg_constant_tl(0);
@@ -8521,6 +8531,14 @@ static void gen_cp0(CPUMIPSState *env, DisasContext *ctx, uint32_t opc,
     check_cp0_enabled(ctx);
     switch (opc) {
     case OPC_MFC0:
+        if (rt == 0) {
+            /*
+             * mfc0 into $zero discards its result. cpu_gpr[0] is NULL on MIPS,
+             * so gen_mfc0() would write through a NULL TCGv; treat it as a NOP
+             * as upstream did before the Penguin hypercall hook was added.
+             */
+            return;
+        }
         gen_mfc0(ctx, cpu_gpr[rt], rd, ctx->opcode & 0x7);
         opn = "mfc0";
         break;
