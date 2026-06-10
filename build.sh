@@ -32,7 +32,7 @@ COMMON_CONFIGURE_ARGS=(
     --disable-linux-aio
 )
 
-PENGUIN_SYSTEM_ARCHES="${PENGUIN_SYSTEM_ARCHES:-armel,aarch64,mipsel,mipseb,mips64el,mips64eb,powerpc,powerpc64,powerpc64le,riscv64,loongarch64,intel64}"
+PENGUIN_SYSTEM_ARCHES="${PENGUIN_SYSTEM_ARCHES:-armel,aarch64,mipsel,mipseb,mips64el,mips64eb,powerpc,powerpc64,powerpc64el,powerpc64le,riscv64,loongarch64,intel64}"
 
 configure_build_dir() {
     local build_dir="$1"
@@ -87,7 +87,7 @@ penguin_system_arch_to_qemu_target() {
         powerpc|ppc)
             printf "ppc-softmmu\n"
             ;;
-        powerpc64|powerpc64le|ppc64)
+        powerpc64|powerpc64le|powerpc64el|ppc64)
             printf "ppc64-softmmu\n"
             ;;
         riscv64)
