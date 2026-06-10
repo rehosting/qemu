@@ -114,6 +114,19 @@ def main():
                     archive.add(env_path, arcname=env_arcname)
                     entries.append(env_arcname)
 
+                env_module = header.get("env_module")
+                if env_module:
+                    # Compiled modules are per qemu-target; arch aliases in
+                    # the manifest share one file.
+                    module_arcname = f"lib/penguin-qemu-env/{env_module}"
+                    if module_arcname not in entries:
+                        module_path = build_dir / "penguin-qemu-env" / env_module
+                        if not module_path.exists():
+                            raise SystemExit(
+                                f"missing compiled env module: {module_path}")
+                        archive.add(module_path, arcname=module_arcname)
+                        entries.append(module_arcname)
+
         metadata = {
             "schema": 1,
             "entries": sorted(entries),

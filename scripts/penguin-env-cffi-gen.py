@@ -1,23 +1,31 @@
 #!/usr/bin/env python3
 #
-# Generate CFFI declarations for CPUArchState from the DWARF of a built
-# Penguin QEMU library.
+# Generate CFFI access to CPUArchState from a built Penguin QEMU library.
 #
-# The emitted header gives Penguin's compatibility layer typed access to
-# the full per-target CPU state (env) -- coprocessor registers, timers,
-# FPU state -- beyond the GDB core register set. Generating from the
-# DWARF of the exact library being packaged means the layout can never
-# drift from the binary.
+# This gives Penguin's compatibility layer typed access to the full
+# per-target CPU state (env) -- coprocessor registers, timers, FPU state
+# -- beyond the GDB core register set. Field names are enumerated from
+# the library's DWARF, so nothing can drift from the binary. Two
+# artifacts are produced per target:
 #
-# Every emitted struct is verified field-by-field against DWARF offsets
-# using cffi itself. Members that cannot be represented (bitfields,
-# unsupported types) are dropped and the resulting holes are filled with
-# explicit padding, so offsets and sizes are always exact; in the worst
-# case a struct degrades to an opaque byte blob of the right size.
+# 1. A compiled CFFI API-mode extension module (_penguin_qemu_env_*).
+#    The cdef uses real type names with `...` ellipses and is compiled
+#    against the actual QEMU headers using the same flags as the library
+#    build (harvested from compile_commands.json), so the C compiler is
+#    the layout authority. Bitfields and anonymous members are fully
+#    supported. The module is tied to the build's CPython ABI.
+#
+# 2. An ABI-mode header (*_env.h) usable with plain ffi.cdef + dlopen on
+#    any Python. Every struct is layout-exact: verified field-by-field
+#    against DWARF offsets using cffi itself, with unrepresentable
+#    members (bitfields, exotic types) dropped and padded over.
+#
+# Penguin prefers the compiled module and falls back to the header.
 
 import argparse
 import json
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -342,6 +350,205 @@ class EnvTypeExtractor:
         raise SystemExit("layout repair did not converge")
 
 
+class ApiCdefEmitter:
+    """
+    Emit a cdef for CFFI API mode: real type names, `...` ellipsis in every
+    struct so the C compiler resolves all layout. Bitfields and anonymous
+    members are declared, not dropped. All pointers are void *.
+    """
+
+    def __init__(self, extractor):
+        # Reuse the DWARF navigation helpers from the ABI extractor.
+        self.x = extractor
+        self.defs = []  # rendered top-level struct definitions, in order
+        self.die_refs = {}  # die offset -> "struct NAME" reference or None
+        self.emitted_names = set()
+        self.warnings = []
+
+    def _members_body(self, die, indent="    ", partial=True):
+        """
+        Render member declarations. With partial=True a trailing `...;`
+        lets the compiler resolve layout and unrenderable members are
+        simply omitted. With partial=False (anonymous inline types, where
+        cffi forbids ellipsis) every member must render; returns None if
+        any cannot.
+        """
+        lines = []
+        for child in die.iter_children():
+            if child.tag != "DW_TAG_member":
+                continue
+            mname = self.x._die_name(child)
+            type_die = self.x._type_die(child)
+            bits = child.attributes.get("DW_AT_bit_size")
+            rendered = self._member_type(type_die, indent=indent,
+                                         strict=not partial)
+            if rendered is None:
+                if not partial:
+                    return None
+                self.warnings.append(
+                    f"api: {self.x._die_name(die) or '<anon>'}."
+                    f"{mname or '<anon>'} omitted")
+                continue
+            ctype, suffix = rendered
+            if bits is not None:
+                if mname is None or suffix:
+                    if not partial:
+                        return None
+                    continue
+                lines.append(f"{indent}{ctype} {mname} : {bits.value};")
+            elif mname is None:
+                # Anonymous struct/union member: keep it anonymous so
+                # flattened field access keeps working.
+                if "\n" in ctype:
+                    lines.append(f"{indent}{ctype};")
+                elif not partial:
+                    return None
+            else:
+                lines.append(f"{indent}{ctype} {mname}{suffix};")
+        if partial:
+            lines.append(f"{indent}...;")
+        return lines
+
+    def _inline_body(self, die, kind, indent):
+        inner = self._members_body(die, indent=indent + "    ", partial=False)
+        if not inner:
+            # None: unrepresentable member inside. Empty: a GNU zero-size
+            # struct marker (e.g. end_reset_fields), which cffi sizes at 1.
+            return None
+        return "\n".join([f"{kind} {{", *inner, f"{indent}}}"])
+
+    def _member_type(self, type_die, indent="    ", strict=False):
+        die = self.x._resolve_typedefs(type_die)
+        if die is None:
+            return None
+        if die.tag == "DW_TAG_pointer_type":
+            return ("void *", "")
+        if die.tag == "DW_TAG_base_type":
+            ctype = self.x._base_ctype(die)
+            return (ctype, "") if ctype else None
+        if die.tag == "DW_TAG_enumeration_type":
+            size = self.x._attr(die, "DW_AT_byte_size") or 4
+            ctype = BASE_TYPES.get(("unsigned", size))
+            return (ctype, "") if ctype else None
+        if die.tag == "DW_TAG_array_type":
+            element = self._member_type(self.x._type_die(die), indent=indent,
+                                        strict=strict)
+            if element is None:
+                return None
+            ctype, suffix = element
+            dims = self.x._array_dims(die)
+            if any(d <= 0 for d in dims):
+                return None
+            return (ctype, "".join(f"[{d}]" for d in dims) + suffix)
+        if die.tag in ("DW_TAG_structure_type", "DW_TAG_union_type"):
+            kind = "struct" if die.tag == "DW_TAG_structure_type" else "union"
+            name = self.x._die_name(die)
+            if name and C_IDENT_RE.match(name) and not strict:
+                ref = self.emit(die)
+                if ref is None:
+                    return None
+                return (ref, "")
+            # Anonymous type -- or a named one needed inside an anonymous
+            # inline type, where cffi forbids partial (`...`) types: inline
+            # its complete definition. Field access is by member-name path,
+            # so the C compiler still verifies the layout.
+            if self.x._attr(die, "DW_AT_declaration"):
+                return None
+            body = self._inline_body(die, kind, indent)
+            if body is None:
+                return None
+            return (body, "")
+        return None
+
+    def emit(self, die):
+        """Emit a named struct/union top-level; returns 'struct NAME'."""
+        if die.offset in self.die_refs:
+            return self.die_refs[die.offset]
+        if self.x._attr(die, "DW_AT_declaration"):
+            return None
+        kind = "struct" if die.tag == "DW_TAG_structure_type" else "union"
+        name = self.x._die_name(die)
+        if not name or not C_IDENT_RE.match(name):
+            return None
+        if name in self.emitted_names:
+            # A distinct definition under an already-used tag would
+            # conflict; rely on the first one (same closure, same type).
+            self.die_refs[die.offset] = f"{kind} {name}"
+            return self.die_refs[die.offset]
+        self.emitted_names.add(name)
+        self.die_refs[die.offset] = f"{kind} {name}"
+        body = self._members_body(die)
+        self.defs.append("\n".join([f"{kind} {name} {{", *body, "};"]))
+        return self.die_refs[die.offset]
+
+    def render(self, root_die):
+        root_ref = self.emit(root_die)
+        if root_ref is None:
+            raise SystemExit("api: CPUArchState has no usable tag")
+        decls = "\n\n".join(self.defs)
+        tag = root_ref.split(" ", 1)[1]
+        if tag != "CPUArchState":
+            decls += f"\n\ntypedef {root_ref} CPUArchState;"
+        else:
+            decls += f"\n\ntypedef struct CPUArchState CPUArchState;"
+        return decls
+
+
+def harvest_compile_flags(build_dir, qemu_target):
+    """
+    Pull -I/-D/-include flags from the compile command of a file built for
+    this target, so the module sees the exact configuration of the library.
+    """
+    commands = json.loads((build_dir / "compile_commands.json").read_text())
+    marker = f"libqemu-{qemu_target}.a.p"
+    entry = next(
+        (c for c in commands
+         if marker in c.get("output", "") or marker in c.get("command", "")),
+        None)
+    if entry is None:
+        raise SystemExit(f"no compile command found for {qemu_target}")
+
+    tokens = shlex.split(entry["command"])
+    base = Path(entry["directory"])
+    flags = []
+    skip_next_for = None
+    for token in tokens[1:]:
+        if skip_next_for:
+            flags.extend([skip_next_for, token])
+            skip_next_for = None
+            continue
+        if token in ("-include", "-isystem", "-iquote"):
+            skip_next_for = token
+            continue
+        if token.startswith("-I"):
+            path = Path(token[2:])
+            if not path.is_absolute():
+                path = base / path
+            flags.append(f"-I{path}")
+        elif token.startswith("-D"):
+            flags.append(token)
+    return flags
+
+
+def compile_env_module(build_dir, qemu_target, mode, api_cdef):
+    module_name = "_penguin_qemu_env_{}_{}".format(
+        mode, qemu_target.replace("-softmmu", "").replace("-", "_"))
+    flags = harvest_compile_flags(build_dir, qemu_target)
+
+    builder = cffi.FFI()
+    builder.cdef(api_cdef)
+    builder.set_source(
+        module_name,
+        '#include "qemu/osdep.h"\n#include "cpu.h"\n',
+        # -UNDEBUG: distutils adds -DNDEBUG, which osdep.h rejects.
+        extra_compile_args=flags + ["-w", "-UNDEBUG"],
+    )
+    out_dir = build_dir / "penguin-qemu-env"
+    out_dir.mkdir(exist_ok=True)
+    artifact = builder.compile(tmpdir=str(out_dir), verbose=False)
+    return Path(artifact).name
+
+
 def find_root_dies(dwarf):
     """Locate the CPUArchState typedef target and struct CPUState size."""
     env_die = None
@@ -378,6 +585,7 @@ def find_root_dies(dwarf):
 
 
 def generate(library_path):
+    """Return (abi_header_text, api_cdef_text) for one library."""
     with open(library_path, "rb") as handle:
         elf = ELFFile(handle)
         if not elf.has_dwarf_info():
@@ -395,12 +603,17 @@ def generate(library_path):
             raise SystemExit(f"{library_path}: CPUArchState unresolvable")
         extractor.verify_and_repair()
 
+        api_emitter = ApiCdefEmitter(EnvTypeExtractor(dwarf))
+        api_cdef = api_emitter.render(env_die)
+        for warning in api_emitter.warnings:
+            log(f"note: {warning}")
+
     for warning in extractor.warnings:
         log(f"note: {warning}")
 
     body = extractor.render_all()
     root = extractor.structs[root_tag]
-    return "\n".join([
+    header = "\n".join([
         "/*",
         " * Generated by scripts/penguin-env-cffi-gen.py from "
         f"{Path(library_path).name}.",
@@ -421,6 +634,7 @@ def generate(library_path):
         f"typedef {root.kind} {root.tag} CPUArchState;",
         "",
     ])
+    return header, api_cdef
 
 
 def main():
@@ -428,23 +642,38 @@ def main():
     parser.add_argument("--build-dir", required=True)
     parser.add_argument("--manifest", required=True,
                         help="cffi manifest written by penguin-cffi-gen.py; "
-                             "entries gain an env_header key")
+                             "entries gain env_header/env_module keys")
+    parser.add_argument("--mode", default=None,
+                        help="override manifest mode (system/kvm)")
     args = parser.parse_args()
 
     build_dir = Path(args.build_dir)
     manifest_path = Path(args.manifest)
     manifest = json.loads(manifest_path.read_text())
+    mode = args.mode or manifest.get("mode", "system")
 
-    generated = {}
+    headers = {}
+    modules = {}
     for entry in manifest["headers"]:
         library = build_dir / entry["library"]
         env_header = entry["header"].replace(".h", "_env.h")
         target = entry.get("qemu_target", library.name)
-        if target not in generated:
+        if target not in headers:
             log(f"generating {env_header} from {library.name}")
-            generated[target] = generate(library)
-        (build_dir / env_header).write_text(generated[target])
+            header, api_cdef = generate(library)
+            headers[target] = header
+            try:
+                modules[target] = compile_env_module(
+                    build_dir, target, mode, api_cdef)
+                log(f"compiled {modules[target]}")
+            except Exception as exc:
+                log(f"warning: compiled env module for {target} failed "
+                    f"({exc}); shipping ABI header only")
+                modules[target] = None
+        (build_dir / env_header).write_text(headers[target])
         entry["env_header"] = env_header
+        if modules[target]:
+            entry["env_module"] = modules[target]
 
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n")
