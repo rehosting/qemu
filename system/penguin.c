@@ -2,6 +2,8 @@
 #include "system/penguin.h"
 #include "system/address-spaces.h"
 #include "system/memory.h"
+#include "system/hw_accel.h"
+#include "exec/gdbstub.h"
 
 typedef struct PenguinMmioRegion {
     MemoryRegion mr;
@@ -152,5 +154,41 @@ penguin_qemu_add_mmio_region(uint64_t base, uint64_t size,
                           region->name, size);
     memory_region_add_subregion_overlap(get_system_memory(), base,
                                         &region->mr, -1000);
+    return 0;
+}
+
+int __attribute__((visibility("default")))
+penguin_read_guest_reg(CPUState *cs, int regnum, uint8_t *buf, int buf_len)
+{
+    GByteArray *bytes;
+    int len;
+
+    if (!cs || !buf || buf_len <= 0) {
+        return -1;
+    }
+
+    cpu_synchronize_state(cs);
+    bytes = g_byte_array_new();
+    len = gdb_read_register(cs, bytes, regnum);
+    if (len <= 0 || len > buf_len) {
+        g_byte_array_free(bytes, true);
+        return -1;
+    }
+    memcpy(buf, bytes->data, len);
+    g_byte_array_free(bytes, true);
+    return len;
+}
+
+int __attribute__((visibility("default")))
+penguin_write_guest_reg(CPUState *cs, int regnum, const uint8_t *buf, int len)
+{
+    if (!cs || !buf || len <= 0) {
+        return -1;
+    }
+
+    cpu_synchronize_state(cs);
+    if (gdb_write_register(cs, (uint8_t *)buf, regnum) <= 0) {
+        return -1;
+    }
     return 0;
 }
