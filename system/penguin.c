@@ -192,3 +192,30 @@ penguin_write_guest_reg(CPUState *cs, int regnum, const uint8_t *buf, int len)
     }
     return 0;
 }
+
+void __attribute__((visibility("default")))
+*penguin_cpu_env(CPUState *cs)
+{
+    /*
+     * CPUArchState immediately follows CPUState in ArchCPU; cpu-target.c
+     * validates this layout for every target. Mirrors cpu_env() without
+     * needing target-specific types in common code.
+     */
+    if (!cs) {
+        return NULL;
+    }
+    return (void *)(cs + 1);
+}
+
+void __attribute__((visibility("default")))
+penguin_sync_cpu_state(CPUState *cs)
+{
+    /*
+     * Pull register state out of the accelerator (KVM) into env and mark
+     * the vCPU dirty so direct env writes are pushed back on next entry.
+     * No-op under TCG.
+     */
+    if (cs) {
+        cpu_synchronize_state(cs);
+    }
+}

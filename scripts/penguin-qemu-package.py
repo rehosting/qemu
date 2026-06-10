@@ -104,6 +104,16 @@ def main():
                 archive.add(header_path, arcname=header_arcname)
                 entries.extend([lib_arcname, header_arcname])
 
+                env_header = header.get("env_header")
+                if env_header:
+                    env_path = build_dir / env_header
+                    if not env_path.exists():
+                        raise SystemExit(
+                            f"missing generated env header: {env_path}")
+                    env_arcname = f"include/penguin-qemu-cffi/{env_header}"
+                    archive.add(env_path, arcname=env_arcname)
+                    entries.append(env_arcname)
+
         metadata = {
             "schema": 1,
             "entries": sorted(entries),

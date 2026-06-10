@@ -180,6 +180,9 @@ python3 scripts/penguin-cffi-gen.py \
     --mode system \
     --build-dir build-system \
     --arches "$PENGUIN_SYSTEM_ARCHES"
+python3 scripts/penguin-env-cffi-gen.py \
+    --build-dir build-system \
+    --manifest build-system/qemu_cffi_system_manifest.json
 
 if [ -n "${PENGUIN_KVM_TARGETS:-}" ]; then
     kvm_targets="$PENGUIN_KVM_TARGETS"
@@ -209,6 +212,9 @@ if [ -n "$kvm_targets" ]; then
         --mode kvm \
         --build-dir build-kvm \
         --targets "$kvm_targets"
+    python3 scripts/penguin-env-cffi-gen.py \
+        --build-dir build-kvm \
+        --manifest build-kvm/qemu_cffi_kvm_manifest.json
 fi
 
 python3 scripts/penguin-qemu-package.py --output penguin-qemu.tar.gz
