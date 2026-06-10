@@ -118,6 +118,10 @@ int penguin_qemu_add_mmio_region(uint64_t base, uint64_t size,
                                  penguin_mmio_read_cb_t read_cb,
                                  penguin_mmio_write_cb_t write_cb,
                                  void *opaque);
+int penguin_read_guest_reg(CPUState *cs, int regnum, uint8_t *buf,
+                           int buf_len);
+int penguin_write_guest_reg(CPUState *cs, int regnum, const uint8_t *buf,
+                            int len);
 """
 
 

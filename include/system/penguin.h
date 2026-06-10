@@ -46,4 +46,15 @@ int penguin_qemu_add_mmio_region(uint64_t base, uint64_t size,
                                  penguin_mmio_write_cb_t write_cb,
                                  void *opaque);
 
+/*
+ * Guest register access by GDB core-feature register number. Reads append
+ * the register bytes (target byte order) into @buf and return the register
+ * width; writes consume exactly the register width from @buf. Both return
+ * a negative value on failure.
+ */
+int penguin_read_guest_reg(CPUState *cs, int regnum, uint8_t *buf,
+                           int buf_len);
+int penguin_write_guest_reg(CPUState *cs, int regnum, const uint8_t *buf,
+                            int len);
+
 #endif /* QEMU_SYSTEM_PENGUIN_H */
