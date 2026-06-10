@@ -24,6 +24,7 @@ SYSTEM_TARGETS = {
     "ppc": "ppc-softmmu",
     "powerpc64": "ppc64-softmmu",
     "powerpc64le": "ppc64-softmmu",
+    "powerpc64el": "ppc64-softmmu",
     "ppc64": "ppc64-softmmu",
     "riscv64": "riscv64-softmmu",
     "loongarch64": "loongarch64-softmmu",
