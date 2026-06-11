@@ -18,6 +18,7 @@ RUN apt-get update && \
         ninja-build \
         pkg-config \
         python3 \
+        python3-dev \
         python3-pip \
         python3-setuptools \
         python3-tomli \
