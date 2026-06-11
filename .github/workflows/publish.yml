@@ -72,6 +72,7 @@ jobs:
           test -s dist/penguin-qemu.tar.gz
           tar tzf dist/penguin-qemu.tar.gz | grep -q '^lib/libqemu-system-'
           tar tzf dist/penguin-qemu.tar.gz | grep -q '^include/penguin-qemu-cffi/'
+          tar tzf dist/penguin-qemu.tar.gz | grep -q '^lib/penguin-qemu-env/'
           tar tzf dist/penguin-qemu.tar.gz | grep -q '^bin/qemu-img$'
           (cd dist && sha256sum penguin-qemu.tar.gz > SHA256SUMS)
 
