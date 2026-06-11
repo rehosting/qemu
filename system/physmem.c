@@ -3121,6 +3121,20 @@ MemoryRegion *get_system_io(void)
     return system_io;
 }
 
+/* ISSUE831: instrumentation for rehosting/qemu#9. A host-side
+ * cpu_memory_rw_debug WRITE issued from a PANDA callback while the vCPU is
+ * mid-cpu_exec corrupts ppc64 guest execution, but ONLY in the CI runner
+ * (never on a dev host). Local instrumented runs showed the path is
+ * mechanically clean: BQL always already held, 0 writes hit a CODE page.
+ * This logs only the ANOMALIES relative to that clean baseline (CODE-page
+ * hits and bql=0), plus a periodic summary, so it stays usable in CI where
+ * the path fires tens of thousands of times per run. Not thread-local on
+ * purpose: the penguin workload is single-vCPU round-robin TCG. */
+int issue831_in_dbg_write;
+unsigned long long issue831_dbg_writes;
+unsigned long long issue831_code_hits;
+unsigned long long issue831_bql0;
+
 static void invalidate_and_set_dirty(MemoryRegion *mr, hwaddr addr,
                                      hwaddr length)
 {
@@ -3141,6 +3155,15 @@ static void invalidate_and_set_dirty(MemoryRegion *mr, hwaddr addr,
     }
     if (dirty_log_mask & (1 << DIRTY_MEMORY_CODE)) {
         assert(tcg_enabled());
+        if (issue831_in_dbg_write) {
+            issue831_code_hits++;
+            fprintf(stderr,
+                "[ISSUE831] *** debug-write hits CODE page: tb_invalidate_phys_range "
+                "phys=0x%" HWADDR_PRIx " len=0x%" HWADDR_PRIx " current_cpu=%d "
+                "(code_hit #%llu of %llu writes) ***\n",
+                addr, length, current_cpu ? current_cpu->cpu_index : -1,
+                issue831_code_hits, issue831_dbg_writes);
+        }
         tb_invalidate_phys_range(NULL, addr, addr + length - 1);
         dirty_log_mask &= ~(1 << DIRTY_MEMORY_CODE);
     }
@@ -4031,6 +4054,27 @@ int cpu_memory_rw_debug(CPUState *cpu, vaddr addr,
                         void *ptr, size_t len, bool is_write)
 {
     uint8_t *buf = ptr;
+    int ret = 0;
+
+    if (is_write) {
+        bool bql = bql_locked();
+        issue831_dbg_writes++;
+        /* Baseline (local, clean): bql always held, current_cpu set, running.
+         * Log only deviations from that, plus a coarse heartbeat. */
+        if (!bql || (issue831_dbg_writes % 10000) == 0) {
+            fprintf(stderr,
+                "[ISSUE831] dbg_write #%llu cpu=%d vaddr=0x%" VADDR_PRIx
+                " len=%zu bql=%d current_cpu=%d running=%d "
+                "(code_hits=%llu bql0=%llu)\n",
+                issue831_dbg_writes, cpu ? cpu->cpu_index : -1, addr, len,
+                bql, current_cpu ? current_cpu->cpu_index : -1,
+                cpu ? cpu->running : -1, issue831_code_hits, issue831_bql0);
+        }
+        if (!bql) {
+            issue831_bql0++;
+        }
+        issue831_in_dbg_write++;
+    }
 
     cpu_synchronize_state(cpu);
     while (len > 0) {
@@ -4041,7 +4085,8 @@ int cpu_memory_rw_debug(CPUState *cpu, vaddr addr,
 
         if (!cpu_translate_for_debug(cpu, addr, &tres)) {
             /* Return error if no physical page mapped */
-            return -1;
+            ret = -1;
+            goto out;
         }
         asidx = cpu_asidx_from_attrs(cpu, tres.attrs);
         /*
@@ -4063,13 +4108,18 @@ int cpu_memory_rw_debug(CPUState *cpu, vaddr addr,
         res = address_space_rw(cpu->cpu_ases[asidx].as, tres.physaddr,
                                tres.attrs, buf, l, is_write);
         if (res != MEMTX_OK) {
-            return -1;
+            ret = -1;
+            goto out;
         }
         len -= l;
         buf += l;
         addr += l;
     }
-    return 0;
+out:
+    if (is_write) {
+        issue831_in_dbg_write--;
+    }
+    return ret;
 }
 
 int qemu_ram_foreach_block(RAMBlockIterFunc func, void *opaque)

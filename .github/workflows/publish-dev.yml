@@ -1,0 +1,103 @@
+name: Release Dev
+
+# Build a throwaway penguin-qemu.tar.gz from an arbitrary dev branch and
+# publish it as a prerelease so downstream CI (e.g. rehosting/penguin) can pull
+# it via QEMU_VERSION. Trigger by pushing a tag matching `dev_*` (or `vdev_*`):
+#
+#   git tag dev_issue831 && git push origin dev_issue831
+#
+# get_release.sh in penguin force-prepends `v` to QEMU_VERSION, so the published
+# release tag is normalized to start with `v`. Push `dev_issue831`, the release
+# is `vdev_issue831`, and penguin consumes it with QEMU_VERSION=dev_issue831.
+
+on:
+  push:
+    tags:
+      - 'dev_*'
+      - 'vdev_*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build_dev_release:
+    runs-on: rehosting-arc
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install git curl jq
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute release tag
+        id: tag
+        run: |
+          REF="${GITHUB_REF_NAME}"
+          case "$REF" in
+            v*) TAG="$REF" ;;
+            *)  TAG="v$REF" ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Publishing dev release '$TAG' (from ref '$REF')."
+          echo "Consume from penguin with QEMU_VERSION=${TAG#v}"
+
+      - name: Trust Harbor's self-signed certificate
+        run: |
+          echo "Fetching certificate from ${{ secrets.REHOSTING_ARC_REGISTRY }}"
+          openssl s_client -showcerts -connect ${{ secrets.REHOSTING_ARC_REGISTRY }}:443 < /dev/null 2>/dev/null | openssl x509 -outform PEM | sudo tee /usr/local/share/ca-certificates/harbor.crt > /dev/null
+          sudo update-ca-certificates
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:master
+            network=host
+          buildkitd-config-inline: |
+            [registry."${{ secrets.REHOSTING_ARC_REGISTRY }}"]
+              insecure = true
+              http = true
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.REHOSTING_ARC_REGISTRY }}
+          username: ${{ secrets.REHOSTING_ARC_REGISTRY_USER }}
+          password: ${{ secrets.REHOSTING_ARC_REGISTRY_PASSWORD }}
+
+      - name: Build package image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: package
+          tags: rehosting/qemu:${{ github.sha }}
+          build-args: |
+            REGISTRY=${{ secrets.REHOSTING_ARC_REGISTRY }}/proxy
+          cache-from: |
+            type=registry,ref=${{ secrets.REHOSTING_ARC_REGISTRY }}/rehosting/qemu:cache,mode=max
+          outputs: type=local,dest=dist
+
+      - name: Verify release artifact
+        run: |
+          test -s dist/penguin-qemu.tar.gz
+          tar tzf dist/penguin-qemu.tar.gz | grep -q '^lib/libqemu-system-'
+          tar tzf dist/penguin-qemu.tar.gz | grep -q '^include/penguin-qemu-cffi/'
+          tar tzf dist/penguin-qemu.tar.gz | grep -q '^bin/qemu-img$'
+          (cd dist && sha256sum penguin-qemu.tar.gz > SHA256SUMS)
+
+      - name: Upload dev package release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Dev Release ${{ steps.tag.outputs.tag }}
+          draft: false
+          prerelease: true
+          generate_release_notes: false
+          files: |
+            dist/penguin-qemu.tar.gz
+            dist/SHA256SUMS
