@@ -39,6 +39,10 @@ COPY --exclude=.git \
      . /qemu/
 
 WORKDIR /qemu
+# Optionally restrict the built system arches (build.sh reads this env var).
+# Defaults to empty so build.sh uses its full arch list unless overridden.
+ARG PENGUIN_SYSTEM_ARCHES=""
+ENV PENGUIN_SYSTEM_ARCHES=${PENGUIN_SYSTEM_ARCHES}
 RUN ./build.sh
 
 FROM scratch AS package

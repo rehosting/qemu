@@ -12,6 +12,7 @@
 
 #include "qapi/error.h"
 #include "qemu/error-report.h"
+#include "chardev/char-fe.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
 #include "hw/virtio/vhost-user-vsock.h"
@@ -91,8 +92,105 @@ static uint64_t vuv_get_features(VirtIODevice *vdev,
 
 static const VMStateDescription vuv_vmstate = {
     .name = "vhost-user-vsock",
-    .unmigratable = 1,
+    .minimum_version_id = VHOST_VSOCK_SAVEVM_VERSION,
+    .version_id = VHOST_VSOCK_SAVEVM_VERSION,
+    .fields = (const VMStateField[]) {
+        VMSTATE_VIRTIO_DEVICE,
+        VMSTATE_END_OF_LIST()
+    },
+    .pre_save = vhost_vsock_common_pre_save,
+    .post_load = vhost_vsock_common_post_load,
 };
+
+/*
+ * (Re)establish the vhost-user backend connection. Factored out of realize so
+ * it can also run on a chardev reconnect (CHR_EVENT_OPENED) — needed for
+ * cross-process loadvm, where a freshly launched QEMU reconnects to the
+ * external vhost-device-vsock backend.
+ */
+static int vuv_connect(DeviceState *dev, Error **errp)
+{
+    VHostVSockCommon *vvc = VHOST_VSOCK_COMMON(dev);
+    VirtIODevice *vdev = VIRTIO_DEVICE(dev);
+    VHostUserVSock *vsock = VHOST_USER_VSOCK(dev);
+    int ret;
+
+    if (vsock->connected) {
+        return 0;
+    }
+
+    vhost_dev_set_config_notifier(&vvc->vhost_dev, &vsock_ops);
+
+    ret = vhost_dev_init(&vvc->vhost_dev, &vsock->vhost_user,
+                         VHOST_BACKEND_TYPE_USER, 0, errp);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = vhost_dev_get_config(&vvc->vhost_dev, (uint8_t *)&vsock->vsockcfg,
+                               sizeof(struct virtio_vsock_config), errp);
+    if (ret < 0) {
+        vhost_dev_cleanup(&vvc->vhost_dev);
+        return ret;
+    }
+
+    vsock->connected = true;
+
+    /* If the guest had already started the device, restart the backend. */
+    if (virtio_device_started(vdev, vdev->status)) {
+        ret = vhost_vsock_common_start(vdev);
+        if (ret < 0) {
+            return ret;
+        }
+    }
+
+    return 0;
+}
+
+static void vuv_disconnect(DeviceState *dev)
+{
+    VHostVSockCommon *vvc = VHOST_VSOCK_COMMON(dev);
+    VirtIODevice *vdev = VIRTIO_DEVICE(dev);
+    VHostUserVSock *vsock = VHOST_USER_VSOCK(dev);
+
+    if (!vsock->connected) {
+        return;
+    }
+    vsock->connected = false;
+
+    if (vhost_dev_is_started(&vvc->vhost_dev)) {
+        vhost_vsock_common_stop(vdev);
+    }
+    vhost_dev_cleanup(&vvc->vhost_dev);
+}
+
+static void vuv_event(void *opaque, QEMUChrEvent event)
+{
+    DeviceState *dev = opaque;
+    VHostVSockCommon *vvc = VHOST_VSOCK_COMMON(dev);
+    VHostUserVSock *vsock = VHOST_USER_VSOCK(dev);
+    Error *local_err = NULL;
+
+    switch (event) {
+    case CHR_EVENT_OPENED:
+        if (vuv_connect(dev, &local_err) < 0) {
+            error_report_err(local_err);
+            qemu_chr_fe_disconnect(&vsock->conf.chardev);
+            return;
+        }
+        break;
+    case CHR_EVENT_CLOSED:
+        /* defer close until later to avoid circular close */
+        vhost_user_async_close(dev, &vsock->conf.chardev, &vvc->vhost_dev,
+                               vuv_disconnect);
+        break;
+    case CHR_EVENT_BREAK:
+    case CHR_EVENT_MUX_IN:
+    case CHR_EVENT_MUX_OUT:
+        /* Ignore */
+        break;
+    }
+}
 
 static void vuv_device_realize(DeviceState *dev, Error **errp)
 {
@@ -112,24 +210,19 @@ static void vuv_device_realize(DeviceState *dev, Error **errp)
 
     vhost_vsock_common_realize(vdev);
 
-    vhost_dev_set_config_notifier(&vvc->vhost_dev, &vsock_ops);
-
-    ret = vhost_dev_init(&vvc->vhost_dev, &vsock->vhost_user,
-                         VHOST_BACKEND_TYPE_USER, 0, errp);
+    vsock->connected = false;
+    ret = vuv_connect(dev, errp);
     if (ret < 0) {
         goto err_virtio;
     }
 
-    ret = vhost_dev_get_config(&vvc->vhost_dev, (uint8_t *)&vsock->vsockcfg,
-                               sizeof(struct virtio_vsock_config), errp);
-    if (ret < 0) {
-        goto err_vhost_dev;
-    }
+    /* Fully initialized: install the chardev event handler so a dropped
+     * backend connection is re-established (e.g. on cross-process loadvm). */
+    qemu_chr_fe_set_handlers(&vsock->conf.chardev, NULL, NULL, vuv_event,
+                             NULL, dev, NULL, true);
 
     return;
 
-err_vhost_dev:
-    vhost_dev_cleanup(&vvc->vhost_dev);
 err_virtio:
     vhost_vsock_common_unrealize(vdev);
     vhost_user_cleanup(&vsock->vhost_user);
@@ -143,6 +236,11 @@ static void vuv_device_unrealize(DeviceState *dev)
 
     /* This will stop vhost backend if appropriate. */
     vuv_set_status(vdev, 0);
+
+    /* Drop the chardev event handler so no reconnect races teardown. */
+    qemu_chr_fe_set_handlers(&vsock->conf.chardev, NULL, NULL, NULL,
+                             NULL, NULL, NULL, false);
+    vsock->connected = false;
 
     vhost_dev_cleanup(&vvc->vhost_dev);
 

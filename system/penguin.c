@@ -1,8 +1,14 @@
 #include "qemu/osdep.h"
+#include "qemu/error-report.h"
+#include "qapi/error.h"
 #include "system/penguin.h"
 #include "system/address-spaces.h"
 #include "system/memory.h"
 #include "system/hw_accel.h"
+#include "system/runstate.h"
+#include "migration/snapshot.h"
+#include "qemu/main-loop.h"
+#include "qemu/aio.h"
 #include "exec/gdbstub.h"
 
 typedef struct PenguinMmioRegion {
@@ -218,4 +224,89 @@ penguin_sync_cpu_state(CPUState *cs)
     if (cs) {
         cpu_synchronize_state(cs);
     }
+}
+
+/*
+ * Snapshot wrappers. These mirror hmp_savevm()/hmp_loadvm() but expose a
+ * minimal C ABI (bool return, no Monitor/QDict/strList) so Penguin's CFFI
+ * layer can drive savevm/loadvm directly. They must be called with the BQL
+ * held and from the main loop context (Penguin schedules them onto the main
+ * loop). save_snapshot() stops and restarts the VM internally; loadvm needs
+ * the VM stopped first and the runstate restored afterwards, as HMP does.
+ */
+bool __attribute__((visibility("default")))
+penguin_save_snapshot(const char *name)
+{
+    Error *err = NULL;
+    bool ok;
+
+    /*
+     * Penguin only takes stopped-VM snapshots, so ignore live-migration-only
+     * blockers (notably the vhost-user vsock backend's lack of LOG_SHMFD
+     * dirty-page logging). Genuinely unmigratable devices are still refused.
+     */
+    migration_snapshot_set_ignore_blockers(true);
+    ok = save_snapshot(name, true, NULL, false, NULL, &err);
+    migration_snapshot_set_ignore_blockers(false);
+    if (!ok) {
+        if (err) {
+            error_reportf_err(err, "penguin_save_snapshot: ");
+        }
+        return false;
+    }
+    return true;
+}
+
+bool __attribute__((visibility("default")))
+penguin_load_snapshot(const char *name)
+{
+    RunState saved_state = runstate_get();
+    Error *err = NULL;
+
+    vm_stop(RUN_STATE_RESTORE_VM);
+
+    if (!load_snapshot(name, NULL, false, NULL, &err)) {
+        if (err) {
+            error_reportf_err(err, "penguin_load_snapshot: ");
+        }
+        return false;
+    }
+
+    load_snapshot_resume(saved_state);
+    return true;
+}
+
+typedef struct PenguinSnapshotReq {
+    char *name;
+    bool load;
+} PenguinSnapshotReq;
+
+static void penguin_snapshot_bh(void *opaque)
+{
+    PenguinSnapshotReq *req = opaque;
+
+    if (req->load) {
+        penguin_load_snapshot(req->name);
+    } else {
+        penguin_save_snapshot(req->name);
+    }
+    g_free(req->name);
+    g_free(req);
+}
+
+/*
+ * Schedule a savevm (load=false) or loadvm (load=true) to run on the main
+ * loop. Safe to call from a vCPU thread (e.g. a guest hypercall handler):
+ * the snapshot itself runs in the main loop context where it can stop the
+ * vCPUs and pump the loop without deadlocking. Fire-and-forget; success or
+ * failure is reported to QEMU stderr by the synchronous wrappers above.
+ */
+void __attribute__((visibility("default")))
+penguin_schedule_snapshot(const char *name, bool load)
+{
+    PenguinSnapshotReq *req = g_new0(PenguinSnapshotReq, 1);
+
+    req->name = g_strdup(name);
+    req->load = load;
+    aio_bh_schedule_oneshot(qemu_get_aio_context(), penguin_snapshot_bh, req);
 }

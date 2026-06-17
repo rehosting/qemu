@@ -29,6 +29,7 @@ struct VHostUserVSock {
     VhostUserState vhost_user;
     VHostUserVSockConf conf;
     struct virtio_vsock_config vsockcfg;
+    bool connected;
 
     /*< public >*/
 };
