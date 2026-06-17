@@ -68,4 +68,12 @@ bool delete_snapshot(const char *name,
  */
 void load_snapshot_resume(RunState state);
 
+/**
+ * migration_snapshot_set_ignore_blockers: when @ignore is true, save_snapshot
+ * skips the live-migration blocker list (e.g. the vhost-user no-LOG_SHMFD
+ * blocker) while still honouring qemu_savevm_state_blocked(). A stopped-VM
+ * snapshot needs no dirty-page logging, so this is safe for snapshots.
+ */
+void migration_snapshot_set_ignore_blockers(bool ignore);
+
 #endif

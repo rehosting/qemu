@@ -125,6 +125,9 @@ int penguin_write_guest_reg(CPUState *cs, int regnum, const uint8_t *buf,
                             int len);
 void *penguin_cpu_env(CPUState *cs);
 void penguin_sync_cpu_state(CPUState *cs);
+bool penguin_save_snapshot(const char *name);
+bool penguin_load_snapshot(const char *name);
+void penguin_schedule_snapshot(const char *name, bool load);
 """
 
 

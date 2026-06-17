@@ -3199,6 +3199,21 @@ bool qemu_loadvm_load_state_buffer(const char *idstr, uint32_t instance_id,
     return se->ops->load_state_buffer(se->opaque, buf, len, errp);
 }
 
+/*
+ * Penguin: when set, save/load_snapshot skip the live-migration *blocker list*
+ * (e.g. the vhost-user "lacks VHOST_USER_PROTOCOL_F_LOG_SHMFD" blocker, which
+ * guards dirty-page logging) while still honouring qemu_savevm_state_blocked()
+ * for genuinely unmigratable devices. A snapshot stops the VM, so dirty-page
+ * logging is irrelevant; this lets stopped-VM snapshots proceed with a
+ * vhost-user vsock backend that does not support logging.
+ */
+static bool snapshot_ignore_migration_blockers;
+
+void migration_snapshot_set_ignore_blockers(bool ignore)
+{
+    snapshot_ignore_migration_blockers = ignore;
+}
+
 bool save_snapshot(const char *name, bool overwrite, const char *vmstate,
                   bool has_devices, strList *devices, Error **errp)
 {
@@ -3216,7 +3231,13 @@ bool save_snapshot(const char *name, bool overwrite, const char *vmstate,
         return false;
     }
 
-    if (migration_is_blocked(errp)) {
+    if (snapshot_ignore_migration_blockers) {
+        /* Still refuse genuinely unmigratable devices, but ignore
+         * live-migration-only blockers (see flag comment above). */
+        if (qemu_savevm_state_blocked(errp)) {
+            return false;
+        }
+    } else if (migration_is_blocked(errp)) {
         return false;
     }
 

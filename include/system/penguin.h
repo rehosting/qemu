@@ -67,4 +67,18 @@ int penguin_write_guest_reg(CPUState *cs, int regnum, const uint8_t *buf,
 void *penguin_cpu_env(CPUState *cs);
 void penguin_sync_cpu_state(CPUState *cs);
 
+/*
+ * Save/load an internal VM snapshot by name. Minimal C ABI wrappers around
+ * save_snapshot()/load_snapshot() for Penguin's CFFI layer. Must be called
+ * with the BQL held from the main loop context. Return true on success.
+ */
+bool penguin_save_snapshot(const char *name);
+bool penguin_load_snapshot(const char *name);
+
+/*
+ * Schedule a save (load=false) or load (load=true) snapshot to run on the
+ * main loop. Safe to call from a vCPU thread; fire-and-forget.
+ */
+void penguin_schedule_snapshot(const char *name, bool load);
+
 #endif /* QEMU_SYSTEM_PENGUIN_H */
