@@ -184,7 +184,11 @@ python3 scripts/penguin-env-cffi-gen.py \
     --build-dir build-system \
     --manifest build-system/qemu_cffi_system_manifest.json
 
-if [ -n "${PENGUIN_KVM_TARGETS:-}" ]; then
+if [ "${PENGUIN_KVM_TARGETS:-}" = "none" ]; then
+    # Explicitly skip the KVM build (e.g. reproducible/cross-host Nix builds
+    # that only want the TCG system libraries and qemu-img).
+    kvm_targets=
+elif [ -n "${PENGUIN_KVM_TARGETS:-}" ]; then
     kvm_targets="$PENGUIN_KVM_TARGETS"
 else
     case "$(uname -m)" in

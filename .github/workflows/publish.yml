@@ -10,19 +10,25 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: "release"
+  cancel-in-progress: false
+
 jobs:
   build_release:
     runs-on: rehosting-arc
+    env:
+      USER: runner
+      LOGNAME: runner
+      TMPDIR: /home/runner/_work/_temp
+      XDG_CACHE_HOME: /home/runner/_work/.cache
     steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get -y install git curl jq
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Prepare runner directories
+        run: mkdir -p "$TMPDIR" "$XDG_CACHE_HOME"
 
       - name: Get next version
         uses: reecetech/version-increment@2024.10.1
@@ -31,43 +37,30 @@ jobs:
           release_branch: ${{ github.ref_name }}
           use_api: true
 
-      - name: Trust Harbor's self-signed certificate
+      - name: Set up Nix
+        uses: rehosting/ci/actions/nix-setup@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache-backend: cachix
+          cachix-name: rehosting-tools
+          cachix-auth-token: ${{ secrets.CACHIX_REHOSTING }}
+          # Non-PR build: nix-setup pushes the built paths to the
+          # rehosting-tools Cachix cache to populate it for downstream flakes.
+          enable-kvm: false
+          extra-nix-config: |
+            max-jobs = 8
+            cores = 8
+
+      - name: Build release artifact
         run: |
-          echo "Fetching certificate from ${{ secrets.REHOSTING_ARC_REGISTRY }}"
-          openssl s_client -showcerts -connect ${{ secrets.REHOSTING_ARC_REGISTRY }}:443 < /dev/null 2>/dev/null | openssl x509 -outform PEM | sudo tee /usr/local/share/ca-certificates/harbor.crt > /dev/null
-          sudo update-ca-certificates
-
-      - uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: |
-            network=host
-          buildkitd-config-inline: |
-            [registry."${{ secrets.REHOSTING_ARC_REGISTRY }}"]
-              insecure = true
-              http = true
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.REHOSTING_ARC_REGISTRY }}
-          username: ${{ secrets.REHOSTING_ARC_REGISTRY_USER }}
-          password: ${{ secrets.REHOSTING_ARC_REGISTRY_PASSWORD }}
-
-      - name: Build package image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: package
-          tags: rehosting/qemu:${{ github.sha }}
-          build-args: |
-            REGISTRY=${{ secrets.REHOSTING_ARC_REGISTRY }}/proxy
-          cache-from: |
-            type=registry,ref=${{ secrets.REHOSTING_ARC_REGISTRY }}/rehosting/qemu:cache,mode=max
-          cache-to: |
-            type=registry,ref=${{ secrets.REHOSTING_ARC_REGISTRY }}/rehosting/qemu:cache,mode=max
-          outputs: type=local,dest=dist
+          set -eux
+          nix build -L .#dist
+          mkdir -p dist
+          cp --dereference result/penguin-qemu.tar.gz dist/penguin-qemu.tar.gz
 
       - name: Verify release artifact
         run: |
+          set -eux
           test -s dist/penguin-qemu.tar.gz
           tar tzf dist/penguin-qemu.tar.gz | grep -q '^lib/libqemu-system-'
           tar tzf dist/penguin-qemu.tar.gz | grep -q '^include/penguin-qemu-cffi/'

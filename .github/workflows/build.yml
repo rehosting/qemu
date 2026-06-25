@@ -7,55 +7,61 @@ on:
       - main
   workflow_dispatch:
 
-env:
-  REGISTRY: ${{ secrets.REHOSTING_ARC_REGISTRY || 'harbor.harbor.svc.cluster.local' }}
-  USER: ${{ secrets.REHOSTING_ARC_REGISTRY_USER || 'external' }}
-  CACHE: ${{ secrets.REHOSTING_ARC_REGISTRY && format('{0}/proxy', secrets.REHOSTING_ARC_REGISTRY) || 'docker.io' }}
-  TARGET: ${{ secrets.REHOSTING_ARC_REGISTRY || 'harbor.harbor.svc.cluster.local/external' }}
-  EXTERNAL_REGISTRY_PASS: 'PctyVGasz15Pn9M0yA9yMNwOawFaXnk3Tl4N'
-
 jobs:
+  # Build the Penguin QEMU release artifact (penguin-qemu.tar.gz) from the Nix
+  # flake. The build is expensive (libqemu-system-*.so for the full system arch
+  # matrix), so it leans on the shared rehosting-tools Cachix cache via
+  # rehosting/ci's nix-setup. PR builds pull from the cache but do not push
+  # (handled by nix-setup's skip-push default); pushes/main populate it.
   build:
     if: ${{ !github.event.pull_request.draft }}
     runs-on: rehosting-arc
+    env:
+      USER: runner
+      LOGNAME: runner
+      TMPDIR: /home/runner/_work/_temp
+      XDG_CACHE_HOME: /home/runner/_work/.cache
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Trust Harbor's self-signed certificate
+      - name: Prepare runner directories
+        run: mkdir -p "$TMPDIR" "$XDG_CACHE_HOME"
+
+      - name: Set up Nix
+        uses: rehosting/ci/actions/nix-setup@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache-backend: cachix
+          cachix-name: rehosting-tools
+          cachix-auth-token: ${{ secrets.CACHIX_REHOSTING }}
+          # No VM needed; avoids install-nix-action's KVM/udevadm step that
+          # fails on Arc pods which expose /dev/kvm without a working udevd.
+          enable-kvm: false
+          extra-nix-config: |
+            max-jobs = 8
+            cores = 8
+
+      - name: Flake check
+        run: nix flake check -L
+
+      - name: Build release artifact
         run: |
-          echo "Fetching certificate from ${{ env.REGISTRY }}"
-          openssl s_client -showcerts -connect ${{ env.REGISTRY }}:443 < /dev/null 2>/dev/null | openssl x509 -outform PEM | sudo tee /usr/local/share/ca-certificates/harbor.crt > /dev/null
-          sudo update-ca-certificates
+          set -eux
+          nix build -L .#dist
+          cp --dereference result/penguin-qemu.tar.gz penguin-qemu.tar.gz
 
-      - uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: |
-            network=host
-          buildkitd-config-inline: |
-            [registry."${{ env.REGISTRY }}"]
-              insecure = true
-              http = true
+      - name: Verify artifact layout
+        run: |
+          set -eux
+          test -s penguin-qemu.tar.gz
+          tar tzf penguin-qemu.tar.gz | grep -q '^lib/libqemu-system-'
+          tar tzf penguin-qemu.tar.gz | grep -q '^include/penguin-qemu-cffi/'
+          tar tzf penguin-qemu.tar.gz | grep -q '^lib/penguin-qemu-env/'
+          tar tzf penguin-qemu.tar.gz | grep -q '^bin/qemu-img$'
 
-      - uses: docker/login-action@v3
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ env.USER }}
-          password: ${{ secrets.REHOSTING_ARC_REGISTRY_PASSWORD || env.EXTERNAL_REGISTRY_PASS }}
-
-      - name: Build QEMU package
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: package
-          push: false
-          tags: ${{ env.TARGET }}/rehosting/qemu:${{ github.sha }}
-          build-args: |
-            REGISTRY=${{ env.CACHE }}
-          cache-from: |
-            type=registry,ref=${{ env.TARGET }}/rehosting/qemu:cache,mode=max
-            type=registry,ref=${{ env.TARGET }}/rehosting/qemu:cache-PR-${{ github.event.number }},mode=max
-          cache-to: |
-            type=registry,ref=${{ env.TARGET }}/rehosting/qemu:cache,mode=max
-            type=registry,ref=${{ env.TARGET }}/rehosting/qemu:cache-PR-${{ github.event.number }}
+          name: penguin-qemu.tar.gz
+          path: penguin-qemu.tar.gz
+          retention-days: 7

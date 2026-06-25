@@ -3,6 +3,8 @@
 /build-kvm/
 /build-system/
 /penguin-qemu.tar.gz
+/result
+/result-*
 /.cache/
 /.vscode/
 *.pyc
