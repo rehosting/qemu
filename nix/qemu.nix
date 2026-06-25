@@ -37,9 +37,13 @@
   # Restrict the built system arch set if desired (build.sh's default covers
   # the full Penguin matrix). Comma-separated, matching PENGUIN_SYSTEM_ARCHES.
   systemArches ? null,
-  # KVM acceleration libraries are host-arch specific and optional; the release
-  # tarball contract does not require them, so default to skipping.
-  enableKvm ? false,
+  # KVM acceleration libraries are host-arch specific. When enabled (the
+  # default, matching the released artifact), build.sh auto-detects the host
+  # arch's KVM target -- x86_64-softmmu on x86_64, aarch64-softmmu on aarch64 --
+  # and produces libqemu-kvm-<arch>.so alongside the TCG system libraries. KVM
+  # only needs the Linux UAPI headers at build time, not /dev/kvm, so it builds
+  # fine in the sandbox. Set false for a host-arch-independent TCG-only build.
+  enableKvm ? true,
 }:
 
 let

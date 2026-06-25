@@ -541,7 +541,20 @@ def compile_env_module(build_dir, qemu_target, mode, api_cdef):
         module_name,
         '#include "qemu/osdep.h"\n#include "cpu.h"\n',
         # -UNDEBUG: distutils adds -DNDEBUG, which osdep.h rejects.
-        extra_compile_args=flags + ["-w", "-UNDEBUG"],
+        # The cffi-generated source assigns opaque struct pointers (e.g.
+        # CPUBreakpoint *, ARMMMUFaultInfo *) to the `void *` fields of the
+        # ellipsis structs. GCC >= 14 promotes -Wincompatible-pointer-types
+        # (and -Wint-conversion) to errors by default, so -w alone is not
+        # enough -- turn those diagnostics off explicitly so the module builds
+        # on a modern toolchain (Ubuntu 22.04's gcc still treats them as
+        # warnings; the Nix gcc is 15.x).
+        extra_compile_args=flags
+        + [
+          "-w",
+          "-UNDEBUG",
+          "-Wno-incompatible-pointer-types",
+          "-Wno-int-conversion",
+        ],
     )
     out_dir = build_dir / "penguin-qemu-env"
     out_dir.mkdir(exist_ok=True)
