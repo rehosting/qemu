@@ -56,7 +56,7 @@ jobs:
           set -eux
           nix build -L .#dist
           mkdir -p dist
-          cp --dereference result/penguin-qemu.tar.gz dist/penguin-qemu.tar.gz
+          cp --dereference result dist/penguin-qemu.tar.gz
 
       - name: Verify release artifact
         run: |

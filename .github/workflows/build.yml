@@ -48,7 +48,7 @@ jobs:
         run: |
           set -eux
           nix build -L .#dist
-          cp --dereference result/penguin-qemu.tar.gz penguin-qemu.tar.gz
+          cp --dereference result penguin-qemu.tar.gz
 
       - name: Verify artifact layout
         run: |
