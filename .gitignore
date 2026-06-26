@@ -5,6 +5,7 @@
 /penguin-qemu.tar.gz
 /result
 /result-*
+/rt
 /.cache/
 /.vscode/
 *.pyc
