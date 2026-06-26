@@ -32,7 +32,14 @@ COMMON_CONFIGURE_ARGS=(
     --disable-linux-aio
 )
 
-PENGUIN_SYSTEM_ARCHES="${PENGUIN_SYSTEM_ARCHES:-armel,aarch64,mipsel,mipseb,mips64el,mips64eb,powerpc,powerpc64,powerpc64el,powerpc64le,riscv64,loongarch64,intel64}"
+# Both `intel64` and `x86_64` are listed: they map to the same x86_64-softmmu
+# target (so only one library is built, then deduped), but each produces its own
+# CFFI header / env-module / lib-alias entry. Penguin's arch_registry canonical
+# name for 64-bit x86 is `x86_64` (with `intel64` an accepted alias), and its
+# qemu loader resolves `libqemu-system-<arch>.so` by the arch name with no
+# intel64<->x86_64 fallback -- so the package must ship BOTH names or x86_64
+# guests fail with "Unable to find QEMU library: libqemu-system-x86_64.so".
+PENGUIN_SYSTEM_ARCHES="${PENGUIN_SYSTEM_ARCHES:-armel,aarch64,mipsel,mipseb,mips64el,mips64eb,powerpc,powerpc64,powerpc64el,powerpc64le,riscv64,loongarch64,intel64,x86_64}"
 
 configure_build_dir() {
     local build_dir="$1"
