@@ -33,8 +33,28 @@
           version = lib.fileContents ./VERSION;
 
           # Build from the flake source (git-tracked tree only -- excludes the
-          # gitignored build-system/ build-kvm/ pyvenv/ scratch dirs and .git).
-          src = self;
+          # gitignored build-system/ build-kvm/ pyvenv/ scratch dirs and .git),
+          # but additionally drop the Nix/CI glue that does not affect the qemu
+          # build. Otherwise `src = self` would rebuild the entire multi-target
+          # qemu on every flake.nix / CI / nix/ edit (the source narHash changes).
+          src = lib.cleanSourceWith {
+            src = self;
+            name = "penguin-qemu-source";
+            filter =
+              path: _type:
+              let
+                rel = lib.removePrefix (toString self + "/") (toString path);
+              in
+              !(
+                rel == "flake.nix"
+                || rel == "flake.lock"
+                || rel == "nix"
+                || lib.hasPrefix "nix/" rel
+                || rel == ".github"
+                || lib.hasPrefix ".github/" rel
+                || lib.hasPrefix "result" rel
+              );
+          };
 
           penguin-qemu = pkgs.callPackage ./nix/qemu.nix {
             inherit src version;
@@ -42,8 +62,15 @@
         in
         {
           inherit penguin-qemu;
-          # The release artifact (penguin-qemu.tar.gz).
-          dist = penguin-qemu.dist;
+          # The release artifact, exposed as a single-output derivation whose
+          # $out IS the tarball file (mirrors penguin-tools' `.#dist`). This way
+          # `nix build .#dist` links `result` directly to penguin-qemu.tar.gz --
+          # `nix build` on the multi-output `penguin-qemu.dist` would instead
+          # link `result` to the default `out` (the unpacked tree), which is why
+          # CI's `cp result/penguin-qemu.tar.gz` had nothing to copy.
+          dist = pkgs.runCommand "penguin-qemu.tar.gz" { } ''
+            cp ${penguin-qemu.dist}/penguin-qemu.tar.gz "$out"
+          '';
           default = penguin-qemu;
         }
       );
