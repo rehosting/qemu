@@ -66,7 +66,14 @@
 #define ENVP_PADDR          0x2000
 #define ENVP_VADDR          cpu_mips_phys_to_kseg0(NULL, ENVP_PADDR)
 #define ENVP_NB_ENTRIES     16
-#define ENVP_ENTRY_SIZE     256
+/*
+ * Penguin/rehosting: the kernel command line is passed to the MIPS guest as a
+ * single prom env entry, so ENVP_ENTRY_SIZE caps the usable cmdline length.
+ * The stock 256 truncated Penguin's boot args (the MIPS kernel itself allows
+ * COMMAND_LINE_SIZE=4096). Match panda-re/qemu and size each entry so all 16
+ * entries pack into the ~1MB prom region below the 0x100000 kernel load addr.
+ */
+#define ENVP_ENTRY_SIZE     0xfdc0
 
 /* Hardware addresses */
 #define FLASH_ADDRESS       0x1e000000ULL
