@@ -194,7 +194,6 @@ static void vuv_event(void *opaque, QEMUChrEvent event)
 
 static void vuv_device_realize(DeviceState *dev, Error **errp)
 {
-    VHostVSockCommon *vvc = VHOST_VSOCK_COMMON(dev);
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
     VHostUserVSock *vsock = VHOST_USER_VSOCK(dev);
     int ret;
