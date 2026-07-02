@@ -32,6 +32,21 @@ def add_qemu_img(archive, build_dir, entries):
     entries.append("bin/qemu-img")
 
 
+# EDK2 UEFI flash images that no Penguin arch loads. Penguin direct-boots
+# every guest via -kernel; the only machine that reads a default EDK2 BIOS is
+# loongarch64 virt, so its images stay. These .bz2 sources look small but
+# decompress to 33-65 MiB zero-padded pflash images each (~260 MiB of the
+# shipped share/qemu). The small x86/i386 EDK2 variants (~4 MiB each) are
+# kept: not worth the risk for the savings.
+EXCLUDED_FIRMWARE = {
+    "edk2-arm-code.fd",
+    "edk2-arm-vars.fd",
+    "edk2-aarch64-code.fd",
+    "edk2-riscv-code.fd",
+    "edk2-riscv-vars.fd",
+}
+
+
 def add_qemu_data(archive, entries):
     pc_bios = Path("pc-bios")
     if not pc_bios.exists():
@@ -41,6 +56,8 @@ def add_qemu_data(archive, entries):
         if not path.is_file():
             continue
         if path.name == "meson.build":
+            continue
+        if path.name.removesuffix(".bz2") in EXCLUDED_FIRMWARE:
             continue
 
         relative = path.relative_to(pc_bios)
