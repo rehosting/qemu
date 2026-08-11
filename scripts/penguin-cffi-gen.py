@@ -80,6 +80,8 @@ typedef uint64_t (*penguin_mmio_read_cb_t)(uint64_t addr, unsigned size,
 typedef void (*penguin_mmio_write_cb_t)(uint64_t addr, uint64_t data,
                                         unsigned size, void *opaque);
 
+typedef void (*penguin_reset_request_cb_t)(int reason, void *opaque);
+
 extern MachineState *current_machine;
 extern int (*qemu_main)(void);
 
@@ -128,6 +130,7 @@ void penguin_sync_cpu_state(CPUState *cs);
 bool penguin_save_snapshot(const char *name);
 bool penguin_load_snapshot(const char *name);
 void penguin_schedule_snapshot(const char *name, bool load);
+void set_penguin_reset_request_callback(penguin_reset_request_cb_t cb, void *opaque);
 """
 
 

@@ -81,4 +81,13 @@ bool penguin_load_snapshot(const char *name);
  */
 void penguin_schedule_snapshot(const char *name, bool load);
 
+/*
+ * Reset request callback. Called synchronously from qemu_system_reset_request()
+ * before the reset executes, when a guest-initiated reset is detected. Allows
+ * Penguin to tear down and reinitialize plugins before QEMU resets the VM.
+ */
+typedef void (*penguin_reset_request_cb_t)(int reason, void *opaque);
+void set_penguin_reset_request_callback(penguin_reset_request_cb_t cb,
+                                         void *opaque);
+
 #endif /* QEMU_SYSTEM_PENGUIN_H */
