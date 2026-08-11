@@ -736,6 +736,9 @@ void qemu_system_guest_pvshutdown(void)
 
 void qemu_system_reset_request(ShutdownCause reason)
 {
+    extern void penguin_invoke_reset_request_callback(ShutdownCause reason);
+    penguin_invoke_reset_request_callback(reason);
+
     if (reboot_action == REBOOT_ACTION_SHUTDOWN &&
         reason != SHUTDOWN_CAUSE_SUBSYSTEM_RESET) {
         shutdown_requested = reason;

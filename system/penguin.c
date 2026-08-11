@@ -310,3 +310,20 @@ penguin_schedule_snapshot(const char *name, bool load)
     req->load = load;
     aio_bh_schedule_oneshot(qemu_get_aio_context(), penguin_snapshot_bh, req);
 }
+
+static penguin_reset_request_cb_t penguin_reset_request_cb;
+static void *penguin_reset_request_opaque;
+
+void __attribute__((visibility("default")))
+set_penguin_reset_request_callback(penguin_reset_request_cb_t cb, void *opaque)
+{
+    penguin_reset_request_cb = cb;
+    penguin_reset_request_opaque = opaque;
+}
+
+void penguin_invoke_reset_request_callback(ShutdownCause reason)
+{
+    if (penguin_reset_request_cb) {
+        penguin_reset_request_cb((int)reason, penguin_reset_request_opaque);
+    }
+}
