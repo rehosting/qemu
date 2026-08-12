@@ -81,6 +81,8 @@ typedef void (*penguin_mmio_write_cb_t)(uint64_t addr, uint64_t data,
                                         unsigned size, void *opaque);
 
 typedef void (*penguin_reset_request_cb_t)(int reason, void *opaque);
+typedef bool (*penguin_qmp_cb_t)(const char *command, const char *args,
+                                 char **result, void *opaque);
 
 extern MachineState *current_machine;
 extern int (*qemu_main)(void);
@@ -131,6 +133,8 @@ bool penguin_save_snapshot(const char *name);
 bool penguin_load_snapshot(const char *name);
 void penguin_schedule_snapshot(const char *name, bool load);
 void set_penguin_reset_request_callback(penguin_reset_request_cb_t cb, void *opaque);
+void set_penguin_qmp_callback(penguin_qmp_cb_t cb, void *opaque);
+bool penguin_handle_qmp(const char *command, const char *args, char **result);
 """
 
 

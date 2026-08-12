@@ -90,4 +90,24 @@ typedef void (*penguin_reset_request_cb_t)(int reason, void *opaque);
 void set_penguin_reset_request_callback(penguin_reset_request_cb_t cb,
                                          void *opaque);
 
+/*
+ * QMP command callback. Called from qmp_dispatch() when an incoming QMP
+ * command is not a built-in QEMU command, allowing Penguin to service custom
+ * QMP commands. @command is the command name, @args is the JSON-encoded
+ * arguments object, and on success the handler sets *@result to a malloc'd
+ * JSON string (ownership transferred to the caller) or leaves it NULL for an
+ * empty response. Returns true if Penguin handled the command.
+ */
+typedef bool (*penguin_qmp_cb_t)(const char *command, const char *args,
+                                 char **result, void *opaque);
+void set_penguin_qmp_callback(penguin_qmp_cb_t cb, void *opaque);
+
+/*
+ * Dispatch a QMP command to the Penguin QMP callback if one is registered.
+ * Defined in system/penguin.c and referenced as a weak symbol from
+ * qapi/qmp-dispatch.c (which is also linked into tools like qemu-nbd where
+ * penguin.c is absent). Returns true if the command was handled.
+ */
+bool penguin_handle_qmp(const char *command, const char *args, char **result);
+
 #endif /* QEMU_SYSTEM_PENGUIN_H */
