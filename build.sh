@@ -6,14 +6,31 @@ cd "$KVM_QEMU_DIR"
 
 COMMON_CONFIGURE_ARGS=(
     --disable-docs
-    --enable-modules
+    # Modules must stay OFF: scripts/penguin-qemu-package.py ships only the
+    # libqemu-*.so libraries, never QEMU's module directory. With modules
+    # enabled, anything meson chooses to modularise (notably virtio-gpu) was
+    # built but never packaged, so `-device virtio-gpu` failed at runtime with
+    # "not a valid device model name". Building in costs ~36 KB/arch.
+    --disable-modules
     --extra-cflags=-fPIC
     --disable-xen
     --disable-opengl
     --disable-spice
     --disable-gtk
     --disable-sdl
-    --disable-vnc
+    # VNC is the only display backend we ship: it needs no host display, and
+    # its only hard dependency is pixman, which we already have (meson.build's
+    # `vnc = declare_dependency()` is a dummy). Costs ~141 KB/arch and zero new
+    # store paths. Its optional extras are pinned off rather than left on auto
+    # so the build can't silently acquire deps if buildInputs ever grow.
+    --enable-vnc
+    --disable-vnc-jpeg
+    --disable-vnc-sasl
+    --disable-png
+    --disable-qemu-vnc
+    # dbus-display auto-enables off glib alone, which IS in our buildInputs.
+    # Pin it off so it can't drift in unnoticed.
+    --disable-dbus-display
     --enable-virtfs
     --disable-vhost-net
     --enable-vhost-user
