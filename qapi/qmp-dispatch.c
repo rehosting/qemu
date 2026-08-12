@@ -25,6 +25,15 @@
 #include "qemu/coroutine.h"
 #include "qemu/main-loop.h"
 
+/*
+ * Penguin QMP hook. Declared as a weak symbol so that binaries which do not
+ * link system/penguin.c (e.g. qemu-nbd, qemu-storage-daemon) still link; the
+ * pointer is NULL at runtime there and the hook is skipped.
+ */
+__attribute__((weak)) bool penguin_handle_qmp(const char *command,
+                                              const char *args,
+                                              char **result);
+
 Visitor *qobject_input_visitor_new_qmp(QObject *obj)
 {
     Visitor *v = qobject_input_visitor_new(obj);
@@ -179,6 +188,44 @@ QDict *coroutine_mixed_fn qmp_dispatch(const QmpCommandList *cmds, QObject *requ
     }
     cmd = qmp_find_command(cmds, command);
     if (cmd == NULL) {
+        /* --- PENGUIN QMP HOOK START --- */
+        /* Only present when system/penguin.c is linked (not in qemu-nbd). */
+        if (penguin_handle_qmp) {
+            char *hook_result = NULL;
+            QDict *hook_args;
+            GString *hook_args_json;
+            bool handled;
+
+            if (!qdict_haskey(dict, "arguments")) {
+                hook_args = qdict_new();
+            } else {
+                hook_args = qdict_get_qdict(dict, "arguments");
+                qobject_ref(hook_args);
+            }
+
+            hook_args_json = qobject_to_json(QOBJECT(hook_args));
+            handled = penguin_handle_qmp(command, hook_args_json->str,
+                                         &hook_result);
+            qobject_unref(hook_args);
+            g_string_free(hook_args_json, true);
+
+            if (handled) {
+                if (hook_result != NULL) {
+                    ret = qobject_from_json(hook_result, &err);
+                    g_free(hook_result);
+                    if (err) {
+                        goto out;
+                    }
+                }
+                if (!ret) {
+                    ret = QOBJECT(qdict_new());
+                }
+                rsp = qdict_new();
+                qdict_put_obj(rsp, "return", ret);
+                goto out;
+            }
+        }
+        /* --- PENGUIN QMP HOOK END --- */
         error_set(&err, ERROR_CLASS_COMMAND_NOT_FOUND,
                   "The command %s has not been found", command);
         goto out;

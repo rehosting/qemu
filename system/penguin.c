@@ -327,3 +327,22 @@ void penguin_invoke_reset_request_callback(ShutdownCause reason)
         penguin_reset_request_cb((int)reason, penguin_reset_request_opaque);
     }
 }
+
+static penguin_qmp_cb_t penguin_qmp_cb;
+static void *penguin_qmp_opaque;
+
+void __attribute__((visibility("default")))
+set_penguin_qmp_callback(penguin_qmp_cb_t cb, void *opaque)
+{
+    penguin_qmp_cb = cb;
+    penguin_qmp_opaque = opaque;
+}
+
+bool __attribute__((visibility("default")))
+penguin_handle_qmp(const char *command, const char *args, char **result)
+{
+    if (penguin_qmp_cb) {
+        return penguin_qmp_cb(command, args, result, penguin_qmp_opaque);
+    }
+    return false;
+}
