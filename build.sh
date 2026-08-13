@@ -24,9 +24,13 @@ COMMON_CONFIGURE_ARGS=(
     # store paths. Its optional extras are pinned off rather than left on auto
     # so the build can't silently acquire deps if buildInputs ever grow.
     --enable-vnc
-    --disable-vnc-jpeg
+    # libjpeg (tight encoding) and libpng (screendump -f png) are both cheap
+    # against the image and directly improve the feature above. SASL stays off:
+    # penguin authenticates VNC with password-secret, so the SASL auth path
+    # would be an unused parser.
+    --enable-vnc-jpeg
     --disable-vnc-sasl
-    --disable-png
+    --enable-png
     --disable-qemu-vnc
     # dbus-display auto-enables off glib alone, which IS in our buildInputs.
     # Pin it off so it can't drift in unnoticed.
@@ -36,16 +40,25 @@ COMMON_CONFIGURE_ARGS=(
     --enable-vhost-user
     --disable-vhost-vdpa
     --disable-vhost-kernel
-    --disable-capstone
-    --disable-libiscsi
-    --disable-libnfs
-    --disable-libusb
-    --disable-usb-redir
-    --disable-lzo
-    --disable-snappy
-    --disable-bzip2
-    --disable-rdma
-    --disable-curl
+    # The block/USB/compression/disassembler group below is enabled
+    # deliberately, having been costed against the penguin image rather than
+    # against this package alone: every library here is either already in the
+    # image (curl, lzo, bzip2, libpng, libjpeg) or under ~5 MB marginal
+    # (libiscsi, libnfs, rdma-core, libusb1, usbredir). capstone is the one
+    # genuinely new dependency at ~29 MB -- the image ships only the Python
+    # binding, not the C library.
+    --enable-capstone
+    --enable-libiscsi
+    --enable-libnfs
+    --enable-libusb
+    --enable-usb-redir
+    --enable-lzo
+    --enable-snappy
+    --enable-bzip2
+    --enable-rdma
+    --enable-curl
+    # linux-aio stays off: host block I/O performance only, and it changes I/O
+    # behaviour rather than adding a capability.
     --disable-linux-aio
 )
 

@@ -33,6 +33,19 @@
   libcap_ng,
   libslirp, # satisfies the slirp.wrap with the system lib (no network)
   dtc, # provides libfdt (--enable-fdt=system) and the dtc compiler
+  # Libraries backing the --enable-* group in build.sh; see buildInputs below.
+  curl,
+  libiscsi,
+  libnfs,
+  rdma-core,
+  libusb1,
+  usbredir,
+  lzo,
+  snappy,
+  bzip2,
+  capstone,
+  libpng,
+  libjpeg,
   fetchFromGitLab,
   # Restrict the built system arch set if desired (build.sh's default covers
   # the full Penguin matrix). Comma-separated, matching PENGUIN_SYSTEM_ARCHES.
@@ -117,6 +130,21 @@ stdenv.mkDerivation {
     libcap_ng
     libslirp
     dtc
+    # Each entry below backs an --enable-* in build.sh. These are hard enables,
+    # so a missing library is a configure failure, not a silent downgrade --
+    # keep the two lists in sync.
+    curl # --enable-curl (HTTP block backend)
+    libiscsi # --enable-libiscsi
+    libnfs # --enable-libnfs
+    rdma-core # --enable-rdma (rdmacm + ibverbs)
+    libusb1 # --enable-libusb
+    usbredir # --enable-usb-redir
+    lzo # --enable-lzo (kdump-lzo dump compression)
+    snappy # --enable-snappy (kdump-snappy)
+    bzip2 # --enable-bzip2 (dmg-bz2 block module)
+    capstone # --enable-capstone (QEMU's own disassembler; pkg-config, >=3.0.5)
+    libpng # --enable-png (screendump -f png)
+    libjpeg # --enable-vnc-jpeg (VNC tight encoding)
   ];
 
   # The store source is read-only but build.sh writes build-system/ and
