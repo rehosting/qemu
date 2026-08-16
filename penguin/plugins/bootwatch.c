@@ -34,6 +34,7 @@
 
 #include <glib.h>
 #include <inttypes.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -375,10 +376,21 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
     g_mutex_unlock(&state_lock);
 
     if (out_path) {
-        g_autoptr(GError) err = NULL;
-        if (!g_file_set_contents(out_path, report->str, report->len, &err)) {
+        /*
+         * Plain fopen rather than g_file_set_contents: the latter writes a
+         * temporary alongside the target and renames it, which fails on
+         * anything that is not a regular file -- including out=/dev/null,
+         * the obvious way to ask for the report to be discarded.
+         */
+        FILE *f = fopen(out_path, "w");
+        if (f && fwrite(report->str, 1, report->len, f) == report->len) {
+            fclose(f);
+        } else {
+            if (f) {
+                fclose(f);
+            }
             fprintf(stderr, "bootwatch: cannot write %s: %s\n",
-                    out_path, err->message);
+                    out_path, g_strerror(errno));
             qemu_plugin_outs(report->str);
         }
     } else {
