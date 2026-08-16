@@ -82,6 +82,14 @@ static uint64_t initcall_addr;
 static bool watch_initcalls;
 static bool watch_io;
 /*
+ * Counting instructions costs ~23% of guest CPU time even via the inline
+ * scoreboard, because it is the one thing that touches every instruction.
+ * It is worth that by default -- it is what separates "hung in a poll loop"
+ * (insns climbing, rung static) from "wedged" (neither moving) -- but a
+ * search loop that only needs the rung can turn it off.
+ */
+static bool count_insns = true;
+/*
  * Physical window of interest, in addition to anything QEMU calls IO.
  *
  * qemu_plugin_hwaddr_is_io() is not sufficient on its own for finding accesses
@@ -238,8 +246,10 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
         struct qemu_plugin_insn *insn = qemu_plugin_tb_get_insn(tb, i);
         uint64_t vaddr = qemu_plugin_insn_vaddr(insn);
 
-        qemu_plugin_register_vcpu_insn_exec_inline_per_vcpu(
-            insn, QEMU_PLUGIN_INLINE_ADD_U64, insn_count_u64, 1);
+        if (count_insns) {
+            qemu_plugin_register_vcpu_insn_exec_inline_per_vcpu(
+                insn, QEMU_PLUGIN_INLINE_ADD_U64, insn_count_u64, 1);
+        }
 
         Rung *r = g_hash_table_lookup(rungs_by_addr, &vaddr);
         if (r) {
@@ -276,7 +286,13 @@ static void append_json(GString *s, uint64_t insn_count)
     g_string_append_printf(s, "{\n");
     g_string_append_printf(s, "  \"schema\": %d,\n", BOOTWATCH_SCHEMA);
     g_string_append_printf(s, "  \"target\": \"%s\",\n", target_name);
-    g_string_append_printf(s, "  \"insns\": %" PRIu64 ",\n", insn_count);
+    if (count_insns) {
+        g_string_append_printf(s, "  \"insns\": %" PRIu64 ",\n", insn_count);
+    } else {
+        /* Not counted: say so rather than reporting a zero that reads as
+         * "nothing executed", which is a real and different outcome. */
+        g_string_append_printf(s, "  \"insns\": null,\n");
+    }
 
     g_string_append_printf(s, "  \"rung\": {\n");
     g_string_append_printf(s, "    \"index\": %u,\n",
@@ -299,12 +315,14 @@ static void append_json(GString *s, uint64_t insn_count)
 
     for (guint i = 0; i < ladder->len; i++) {
         Rung *r = g_ptr_array_index(ladder, i);
+        g_autofree char *first = (r->hits && count_insns)
+            ? g_strdup_printf("%" PRIu64, r->first_insn)
+            : g_strdup("null");
         g_string_append_printf(
             s,
             "      {\"index\": %u, \"name\": \"%s\", \"addr\": \"0x%" PRIx64
-            "\", \"hits\": %" PRIu64 ", \"first_insn\": %" PRIu64 "}%s\n",
-            r->index, r->name, r->addr, r->hits,
-            r->hits ? r->first_insn : 0,
+            "\", \"hits\": %" PRIu64 ", \"first_insn\": %s}%s\n",
+            r->index, r->name, r->addr, r->hits, first,
             i + 1 < ladder->len ? "," : "");
     }
     g_string_append_printf(s, "    ]\n");
@@ -430,6 +448,11 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
             watch_initcalls = true;
         } else if (g_strcmp0(key, "io") == 0 && val) {
             if (!qemu_plugin_bool_parse(key, val, &watch_io)) {
+                fprintf(stderr, "bootwatch: bad boolean: %s\n", argv[i]);
+                return -1;
+            }
+        } else if (g_strcmp0(key, "insns") == 0 && val) {
+            if (!qemu_plugin_bool_parse(key, val, &count_insns)) {
                 fprintf(stderr, "bootwatch: bad boolean: %s\n", argv[i]);
                 return -1;
             }

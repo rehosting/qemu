@@ -43,7 +43,8 @@ from decoding the kernel's own kallsyms tables.
 |---|---|
 | `rung=<addr>[:<name>]` | Add a ladder landmark. **Repeatable; ladder order is argv order, not address order.** `name` defaults to the address. |
 | `initcall=<addr>` | Address of `do_one_initcall`. Enables the initcall counters. |
-| `io=on\|off` | Log memory accesses per region. Off by default — the callback fires on every access. |
+| `insns=on\|off` | Count executed instructions. On by default. Costs ~18% of guest CPU (see below); turn it off if you only need the rung. |
+| `io=on\|off` | Log memory accesses per region. Off by default — the callback fires on every access, and roughly doubles guest CPU. |
 | `iomin=<paddr>`, `iomax=<paddr>` | Additionally record accesses in this physical window, not just ones QEMU calls IO. Requires `io=on`. See the caveat below. |
 | `out=<path>` | Write the JSON report here. Defaults to QEMU's plugin log. |
 
@@ -93,6 +94,30 @@ needs it (reading a link register, forcing a return value) has to find another
 mechanism on those targets.
 
 ### Cost
+
+Measured on a full `vmlinux.mipseb` (6.13) boot to panic on `-M malta`, median
+guest CPU time over 8–15 alternating runs, pinned to one core:
+
+| configuration | CPU | vs. no plugin |
+|---|---|---|
+| QEMU built `--disable-plugins` | 5.240 s | — |
+| built `--enable-plugins`, **no plugin loaded** | 5.240 s | **+0.00%** |
+| bootwatch, 12 rungs + initcall, `insns=off` | 5.315 s | +2% |
+| bootwatch, 12 rungs + initcall (default) | 6.295 s | +20% |
+| bootwatch + `io=on` | 13.400 s | +156% |
+
+So **enabling the plugin API costs nothing when no plugin is loaded** — the
+difference is below the ~0.2% resolution of the measurement. Binary size grows
+0.7% (58.7 → 59.1 MB).
+
+Almost all of the default-configuration cost is the instruction counter, which
+is the one thing touching every instruction: `insns=off` recovers 18 of those 20
+points. Keep it on when you need to tell "hung in a poll loop" (insns climbing,
+rung static) from "wedged" (neither moving); turn it off for a search loop that
+only compares rungs.
+
+`io=on` roughly doubles guest CPU and should be a deliberate second pass, not
+the default for every boot in a search.
 
 Instruction counting uses the inline scoreboard, not a callback. Rung and
 initcall watches are ordinary callbacks, so put rungs on **one-shot landmarks,
