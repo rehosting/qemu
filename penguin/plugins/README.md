@@ -68,6 +68,36 @@ one. At exit, `entered - returned == 1` with `in_flight: true` means the kernel
 is still inside the last initcall, i.e. it **hung** there rather than
 panicking. `site` reports which.
 
+### Why the memory sweep, and not an exception handler
+
+The obvious cheap design is to catch the *fault*: accessing hardware that is not
+there should trap, and traps are rare, so an exception callback
+(`qemu_plugin_register_vcpu_discon_cb` with `QEMU_PLUGIN_DISCON_EXCEPTION`)
+would cost nothing. On `mips`/`malta` that design detects **nothing, ever**,
+because there is no fault. Verified three ways:
+
+- The instruction trace runs straight through. A load from unmapped
+  `0x1c000000` and a store to `0x1c000004` are followed by the next
+  instruction in program order, with no vector to an exception handler.
+- `-d int,guest_errors` over the same run logs **zero** lines.
+- `MIPSCPUClass::no_data_aborts` is set only by `hw/mips/jazz.c`, and malta
+  does not set `ignore_memory_transaction_failures`. Had the access reached
+  `cpu_transaction_failed()`, malta *would* have raised `EXCP_DBE`. It did not,
+  so the access never registered as a failed transaction at all.
+
+So the guest reads garbage and carries on. That is the silent-failure mode this
+sensor exists to catch, and instrumenting every access is the only way to see
+it — hence `io=on` being worth its cost rather than a luxury.
+
+What the cheaper configuration still sees is the *downstream symptom*, and only
+sometimes: a driver that polls a register that is not there spins, which shows
+up as instructions climbing while the rung stays put. If instead the driver
+reads garbage and proceeds, nothing in the cheap configuration notices.
+
+(The mechanism — why these pages are not flagged `TLB_MMIO` — was not chased
+down. The behaviour is what is verified here, on malta specifically; other
+boards may well fault.)
+
 ### Caveat: `is_io` is not enough to find unmodelled hardware
 
 `qemu_plugin_hwaddr_is_io()` is unreliable for the case this sensor exists to
@@ -116,8 +146,8 @@ points. Keep it on when you need to tell "hung in a poll loop" (insns climbing,
 rung static) from "wedged" (neither moving); turn it off for a search loop that
 only compares rungs.
 
-`io=on` roughly doubles guest CPU and should be a deliberate second pass, not
-the default for every boot in a search.
+`io=on` roughly doubles guest CPU. Pay it anyway when you are looking for
+unmodelled hardware — see below, there is no cheaper signal.
 
 Instruction counting uses the inline scoreboard, not a callback. Rung and
 initcall watches are ordinary callbacks, so put rungs on **one-shot landmarks,
