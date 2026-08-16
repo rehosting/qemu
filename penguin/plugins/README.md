@@ -85,33 +85,48 @@ because there is no fault. Verified three ways:
   `cpu_transaction_failed()`, malta *would* have raised `EXCP_DBE`. It did not,
   so the access never registered as a failed transaction at all.
 
-So the guest reads garbage and carries on. That is the silent-failure mode this
-sensor exists to catch, and instrumenting every access is the only way to see
-it — hence `io=on` being worth its cost rather than a luxury.
+The reason is that malta covers most of its unused physical space with the
+`empty_slot` device, which *accepts* the access and returns zero. So the guest
+reads garbage and carries on. That is the silent-failure mode this sensor exists
+to catch, and instrumenting every access is the only way to see it — hence
+`io=on` being worth its cost rather than a luxury.
 
 What the cheaper configuration still sees is the *downstream symptom*, and only
 sometimes: a driver that polls a register that is not there spins, which shows
 up as instructions climbing while the rung stays put. If instead the driver
 reads garbage and proceeds, nothing in the cheap configuration notices.
 
-(The mechanism — why these pages are not flagged `TLB_MMIO` — was not chased
-down. The behaviour is what is verified here, on malta specifically; other
-boards may well fault.)
+The upside of `empty_slot` being a real device is that the access is
+*attributable*: with the `TLB_MMIO` fix (below) it is reported against a region
+named `empty-slot`, which is a self-describing "the guest touched hardware this
+machine does not model" signal.
 
-### Caveat: `is_io` is not enough to find unmodelled hardware
+### `is_io` was broken, and this series fixes it
 
-`qemu_plugin_hwaddr_is_io()` is unreliable for the case this sensor exists to
-catch. Measured on `mips`/`malta`: a load from an unmapped physical address, and
-even a load from the board's own serial port at `0x100003f8`, both report
-`is_io == false` with a device name of `"RAM"`. Upstream's `contrib/plugins/
-hwprofile.c` consequently reports *nothing at all* for those accesses.
+`qemu_plugin_hwaddr_is_io()` could never return true. `tlb_plugin_lookup()`
+tested `TLB_MMIO` against `CPUTLBEntry.addr_idx[]`, but `tlb-flags.h` puts
+`TLB_MMIO` in `CPUTLBEntryFull.slow_flags[]` and leaves only `TLB_FORCE_SLOW`
+in the address word. So every access was reported as non-IO with a device name
+of `"RAM"`, and upstream's `contrib/plugins/hwprofile.c` — a plugin whose sole
+purpose is per-device IO profiling — printed nothing but its header on every
+target.
 
-So `iomin`/`iomax` let a caller who knows where RAM ends record everything above
-it regardless of `is_io`. Accesses QEMU does not attribute to a named device are
-bucketed by 64 KiB physical granule (`RAM@0x1c000000`) rather than collapsed
-into one `"RAM"` entry, and each bucket records the physical range actually
-touched plus the PC that first touched it — which is what identifies the
-hardware to model or bypass.
+Fixed in this series (`accel/tcg: fix qemu_plugin_hwaddr_is_io() never
+reporting IO`). On a full Linux boot on malta, `hwprofile` goes from an empty
+table to 16 regions and ~1.8M accesses, and bootwatch attributes the probe's
+unmapped access to `empty-slot`.
+
+`iomin`/`iomax` remain useful as a second, address-based filter — they need no
+cooperation from the memory-region layer, and they catch traffic to a physical
+window you care about whether or not QEMU attributes it to a device. Accesses
+QEMU cannot attribute (a region with no `name`, reported as `anon<ptr>` or
+`RAM`) are bucketed by 64 KiB physical granule rather than collapsed into one
+entry, and each bucket records the physical range touched plus the PC that
+first touched it.
+
+Note that many QEMU devices never set a `MemoryRegion` name, so even with the
+fix a good fraction of regions report as `anon<ptr>`. The physical range is the
+reliable identifier.
 
 ### Caveat: no register access on some targets
 
