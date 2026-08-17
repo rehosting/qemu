@@ -42,6 +42,33 @@ result is wrong, not approximate.
 `KERNEL_LO`/`KERNEL_HI` at the top bound what counts as a kernel address; they
 are set for MIPS kseg0 and need adjusting per target.
 
+## mktramp.py — reset-vector trampoline for a raw image
+
+```
+mktramp.py --entry 0x802d7eb0 [--mask-i8259] -o tramp.bin
+```
+
+`-kernel` is not usable for every BYOK image: on `malta` the prom environment
+blob occupies low physical memory, so an image linked to load at physical 0 is
+refused for overlapping ROMs before a single instruction runs. Dropping
+`-kernel` is simpler and closer to the truth — pass the trampoline as `-bios`
+and place the kernel with `-device loader`:
+
+```
+qemu-system-mips -M malta -cpu 34Kf -m 128 \
+    -bios tramp.bin \
+    -device loader,file=vmlinux.bin,addr=0x0,force-raw=on
+```
+
+`--mask-i8259` deserves its own paragraph, because the failure it prevents
+looks like a guest bug and is not. QEMU's i8259 resets with `IMR = 0` and the
+PIT free-runs, so IP2 is asserted forever; a kernel written for an SoC that has
+never heard of an 8259 cannot mask it, and its first `local_irq_enable()`
+livelocks in its own interrupt dispatcher. The machine model contributes
+hardware the real board does not have. Quiescing that before entering the
+kernel is exactly what a bootloader is for, which is why it belongs here rather
+than in a patch to the guest.
+
 ## klog.py — printk ring buffer out of a running guest
 
 ```
