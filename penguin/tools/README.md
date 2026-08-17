@@ -16,6 +16,13 @@ Takes a raw kernel blob — no ELF, no headers, stripped — and recovers the
 address it was linked at plus its whole symbol table. `--ladder` prints a
 ready-made `bootwatch` argument string.
 
+It assumes the image is **flat**: file offset plus base equals virtual address,
+which is what an `objcopy -O binary` payload out of a firmware image looks
+like. Hand it an ELF and it will produce a confident, wrong answer, because an
+ELF's file offsets are not a single linear map — use `nm` on those. A
+self-decompressing image has to be unpacked first; the tables live in the
+payload, not the stub.
+
 The order is the interesting part, and getting it wrong costs a lot of time:
 
 1. **`__ksymtab` fixes the load base.** Each entry is
