@@ -59,9 +59,10 @@ cooperation from the guest at all.
 
 In practice that is the difference between "stopped climbing at rung 5" and
 the guest's own `<SoC> switch chip is not found!!!`, followed by a full
-register dump and call trace. The rung is what a search loop optimises; the log is what chooses the
-next lever. One observed intervention moved no rung at all and only changed the
-log — and it was the one without which the boot never reached userspace.
+register dump and call trace. The rung is what a search loop optimises; the
+log is what chooses the next lever. One observed intervention moved no rung at
+all and only changed the log — and it was the one without which the boot never
+reached userspace.
 
 ### Options
 
