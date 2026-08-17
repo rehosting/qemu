@@ -84,7 +84,8 @@ Get `__log_buf` from `kimage.py`.
 This is the counterpart to `bootwatch`, not a replacement. The ladder is a
 monotone scalar you can hill-climb on; the log is what tells you *which lever
 to pull*. On a real bring-up the log was the difference between "stopped
-climbing" and "RTK Switch chip is not found", and it costs nothing at runtime.
+climbing" and the guest's own one-line explanation of what it failed to
+find, and it costs nothing at runtime.
 
 Reads `struct printk_log`, i.e. Linux 3.5 through 5.9. Newer kernels use the
 `printk_ringbuffer` and need a different decoder.
