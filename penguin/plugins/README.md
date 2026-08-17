@@ -34,8 +34,34 @@ it. That is what makes two boots of the same kernel under different
 configurations comparable, and therefore what lets a search loop hill-climb on
 it.
 
-Addresses are the caller's problem. For a stripped vendor `vmlinux` they come
-from decoding the kernel's own kallsyms tables.
+Addresses are the caller's problem. For a stripped vendor image they come from
+`../tools/kimage.py`, which recovers the load base and the whole symbol table
+from the raw blob and will print a ready-made `rung=` argument list.
+
+### Put failures on their own channel, not on the ladder
+
+Do **not** add `panic` or `die` as high-index rungs. It looks natural and it
+breaks the metric: a *non-fatal* oops in a module initcall — the kind a
+degraded bring-up produces constantly — fires `die` and pins the score at the
+top. In one measured pair, a kernel that reached userspace and a kernel that
+died in `plat_irq_init` both scored the same maximum rung.
+
+The ladder is for progress, and its monotonicity is only meaningful if every
+entry means "got further". Watch faults separately and report them beside the
+rung, with their PC.
+
+### Pair it with the log, and expect the log to do more work
+
+`bootwatch` answers *how far*. It cannot answer *why*, and on a board we do not
+model there is no console to ask. But `__log_buf` is ordinary RAM, so
+`../tools/klog.py` reads the guest's printk ring out over QMP with no
+cooperation from the guest at all.
+
+In practice that is the difference between "stopped climbing at rung 5" and
+`RTK Switch chip is not found!!!` followed by a full register dump and call
+trace. The rung is what a search loop optimises; the log is what chooses the
+next lever. One observed intervention moved no rung at all and only changed the
+log — and it was the one without which the boot never reached userspace.
 
 ### Options
 
@@ -90,6 +116,13 @@ The reason is that malta covers most of its unused physical space with the
 reads garbage and carries on. That is the silent-failure mode this sensor exists
 to catch, and instrumenting every access is the only way to see it — hence
 `io=on` being worth its cost rather than a luxury.
+
+This is not a corner case. Booting a vendor kernel for an unmodelled SoC, the
+entire board setup turned out to hinge on one 32-bit read of a chip-ID register
+that is not there: it returned zero, the SoC went unrecognised, and both the
+interrupt controller and the timer silently declined to initialise. Nothing
+faulted. The one read that mattered was indistinguishable, at the fault level,
+from the millions that did not.
 
 What the cheaper configuration still sees is the *downstream symptom*, and only
 sometimes: a driver that polls a register that is not there spins, which shows
