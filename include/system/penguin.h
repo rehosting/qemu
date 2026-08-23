@@ -8,6 +8,7 @@
 #define QEMU_SYSTEM_PENGUIN_H
 
 #include "qemu/typedefs.h"
+#include "qapi/qapi-types-run-state.h"   /* ShutdownCause */
 
 typedef int (*penguin_guest_hypercall_cb_t)(CPUState *cs, uint64_t nr,
                                             uint64_t a0, uint64_t a1,
@@ -89,6 +90,7 @@ void penguin_schedule_snapshot(const char *name, bool load);
 typedef void (*penguin_reset_request_cb_t)(int reason, void *opaque);
 void set_penguin_reset_request_callback(penguin_reset_request_cb_t cb,
                                          void *opaque);
+void penguin_invoke_reset_request_callback(ShutdownCause reason);
 
 /*
  * QMP command callback. Called from qmp_dispatch() when an incoming QMP
