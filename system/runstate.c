@@ -53,6 +53,7 @@
 #include "qom/object.h"
 #include "qom/object_interfaces.h"
 #include "system/cpus.h"
+#include "system/penguin.h"
 #include "system/qtest.h"
 #include "system/replay.h"
 #include "system/reset.h"
@@ -736,7 +737,6 @@ void qemu_system_guest_pvshutdown(void)
 
 void qemu_system_reset_request(ShutdownCause reason)
 {
-    extern void penguin_invoke_reset_request_callback(ShutdownCause reason);
     penguin_invoke_reset_request_callback(reason);
 
     if (reboot_action == REBOOT_ACTION_SHUTDOWN &&

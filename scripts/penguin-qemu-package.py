@@ -32,6 +32,23 @@ def add_qemu_img(archive, build_dir, entries):
     entries.append("bin/qemu-img")
 
 
+def add_penguin_plugins(archive, build_dir, entries):
+    """Ship the Penguin TCG plugins from penguin/plugins/.
+
+    Only built when the TCG (system) configure ran with --enable-plugins, so
+    an absent directory is not an error -- callers that need a plugin fail
+    loudly at -plugin load time instead.
+    """
+    plugin_dir = build_dir / "penguin" / "plugins"
+    if not plugin_dir.is_dir():
+        return
+
+    for path in sorted(plugin_dir.glob("*.so")):
+        arcname = f"lib/qemu-plugins/{path.name}"
+        archive.add(path, arcname=arcname)
+        entries.append(arcname)
+
+
 # EDK2 UEFI flash images that no Penguin arch loads. Penguin direct-boots
 # every guest via -kernel; the only machine that reads a default EDK2 BIOS is
 # loongarch64 virt, so its images stay. These .bz2 sources look small but
@@ -97,6 +114,7 @@ def main():
     with tarfile.open(output, "w:gz") as archive:
         add_qemu_img(archive, system_build_dir, entries)
         add_qemu_data(archive, entries)
+        add_penguin_plugins(archive, system_build_dir, entries)
 
         for mode, build_dir, manifest_path in manifests:
             if add_file(

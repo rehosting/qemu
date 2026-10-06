@@ -205,13 +205,18 @@ targets_to_kvm_libs() {
 
 system_targets="$(build_system_target_list)"
 
+# --enable-plugins is TCG-only (configure rejects it alongside --disable-tcg),
+# so it belongs here rather than in COMMON_CONFIGURE_ARGS. It powers
+# penguin/plugins/bootwatch.so, which observes boot progress on kernels we did
+# not build. --enable-modules already pulls in gmodule, so no new dependency.
 configure_build_dir build-system \
     --target-list="$system_targets" \
     --enable-tcg \
+    --enable-plugins \
     --disable-kvm
 
 mapfile -t system_libs < <(build_system_lib_list)
-ninja -C build-system "${system_libs[@]}" qemu-img
+ninja -C build-system "${system_libs[@]}" qemu-img penguin-plugins
 stage_system_lib_aliases
 python3 scripts/penguin-cffi-gen.py \
     --mode system \

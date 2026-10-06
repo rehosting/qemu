@@ -1591,8 +1591,16 @@ bool tlb_plugin_lookup(CPUState *cpu, vaddr addr, int mmu_idx,
     full = &cpu->neg.tlb.d[mmu_idx].fulltlb[index];
     data->phys_addr = full->phys_addr | (addr & ~TARGET_PAGE_MASK);
 
-    /* We must have an iotlb entry for MMIO */
-    if (tlb_addr & TLB_MMIO) {
+    /*
+     * We must have an iotlb entry for MMIO.
+     *
+     * TLB_MMIO is a *slow* flag: per tlb-flags.h it lives in
+     * CPUTLBEntryFull.slow_flags[], and CPUTLBEntry.addr_idx[] carries only
+     * TLB_FORCE_SLOW to say "look there". Testing tlb_addr for it therefore
+     * never matches, which silently made qemu_plugin_hwaddr_is_io() always
+     * false and qemu_plugin_hwaddr_device_name() always "RAM".
+     */
+    if (full->slow_flags[access_type] & TLB_MMIO) {
         MemoryRegionSection *section = full->section;
         data->is_io = true;
         data->mr = section->mr;
