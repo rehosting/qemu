@@ -71,6 +71,14 @@ int qemu_plugin_write_memory_vaddr_fault(uint64_t addr, GByteArray *data,
     return QEMU_PLUGIN_VADDR_BAD_MODE;
 }
 
+int qemu_plugin_access_memory_vaddr_fault(struct qemu_plugin_vaddr_op *ops,
+                                          size_t n,
+                                          enum qemu_plugin_vaddr_mode mode,
+                                          bool fault, size_t *failed_op)
+{
+    return QEMU_PLUGIN_VADDR_BAD_MODE;
+}
+
 void qemu_plugin_register_vcpu_bp_cb(qemu_plugin_id_t id,
                                      qemu_plugin_vcpu_bp_cb_t cb,
                                      void *userdata)

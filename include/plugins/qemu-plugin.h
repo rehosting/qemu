@@ -1210,6 +1210,52 @@ int qemu_plugin_write_memory_vaddr_fault(uint64_t addr, GByteArray *data,
                                          bool fault);
 
 /**
+ * struct qemu_plugin_vaddr_op - one range of a batched access
+ *
+ * @addr: guest virtual address
+ * @data: for a read, resized to @len on success; for a write, the bytes
+ *        to write (all of @data->len)
+ * @len: number of bytes to read (ignored for a write)
+ * @write: write instead of read
+ */
+struct qemu_plugin_vaddr_op {
+    uint64_t addr;
+    GByteArray *data;
+    size_t len;
+    bool write;
+};
+
+#define QEMU_PLUGIN_VADDR_OPS_MAX 16
+
+/**
+ * qemu_plugin_access_memory_vaddr_fault() - several reads and writes at once
+ *
+ * @ops: the ranges, at most QEMU_PLUGIN_VADDR_OPS_MAX
+ * @n: number of ranges
+ * @mode: privilege used for translation
+ * @fault: if a page is not accessible, raise a guest fault
+ * @failed_op: if not NULL, set to the index of the range that failed
+ *
+ * Like qemu_plugin_read_memory_vaddr_fault() and
+ * qemu_plugin_write_memory_vaddr_fault(), for several ranges together:
+ * every page of every range is made accessible (raising one guest fault at
+ * a time, as for a single range) before any range is copied.  So the
+ * writes land all together or not at all: a range the guest refuses leaves
+ * every range unwritten, and the guest never runs between the first and
+ * the last copy on this vCPU.  Other vCPUs keep running; this is not
+ * atomic with respect to them.
+ *
+ * Returns QEMU_PLUGIN_VADDR_OK if every range was copied, or the result
+ * for the first range that could not be accessed (then nothing was
+ * written).
+ */
+QEMU_PLUGIN_API
+int qemu_plugin_access_memory_vaddr_fault(struct qemu_plugin_vaddr_op *ops,
+                                          size_t n,
+                                          enum qemu_plugin_vaddr_mode mode,
+                                          bool fault, size_t *failed_op);
+
+/**
  * typedef qemu_plugin_vcpu_bp_cb_t - breakpoint callback
  *
  * @vcpu_index: the vCPU
