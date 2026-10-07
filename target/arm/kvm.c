@@ -1608,10 +1608,61 @@ static bool kvm_arm_handle_debug(ARMCPU *cpu,
 #define PENGUIN_CORE_REG(x) (KVM_REG_ARM64 | KVM_REG_SIZE_U64 | \
                              KVM_REG_ARM_CORE | KVM_REG_ARM_CORE_REG(x))
 
+/*
+ * A wanted hypercall pulls the whole vCPU in (kvm_cpu_synchronize_state),
+ * which marks it dirty, so the next KVM_RUN pushes the whole vCPU back out:
+ * another ~330 single-register ioctls. Nearly every handler only reads
+ * state and memory and returns a value in x0 (or writes x1..x5/x8), so
+ * snapshot env after the pull and, if nothing but GPRs and the PC changed,
+ * write just those and leave the vCPU clean. Anything else changed (system
+ * registers, FP/SIMD, PSTATE, ...) falls back to the full put.
+ */
+static __thread CPUARMState *penguin_env_snap;
+
+static void penguin_snapshot_env(CPUARMState *env)
+{
+    if (!penguin_env_snap) {
+        penguin_env_snap = g_new(CPUARMState, 1);
+    }
+    memcpy(penguin_env_snap, env, sizeof(*env));
+}
+
+static bool penguin_put_changed_gprs(CPUState *cs, CPUARMState *env)
+{
+    CPUARMState *snap = penguin_env_snap;
+    uint64_t old_x[31], old_pc;
+    bool rest_same;
+    int i;
+
+    /* Compare everything except x0..x30 and pc. */
+    memcpy(old_x, snap->xregs, sizeof(old_x));
+    old_pc = snap->pc;
+    memcpy(snap->xregs, env->xregs, sizeof(old_x));
+    snap->pc = env->pc;
+    rest_same = memcmp(snap, env, sizeof(*env)) == 0;
+    if (!rest_same) {
+        return false;
+    }
+
+    for (i = 0; i < 31; i++) {
+        if (env->xregs[i] != old_x[i] &&
+            kvm_set_one_reg(cs, PENGUIN_CORE_REG(regs.regs[i]),
+                            &env->xregs[i])) {
+            return false;
+        }
+    }
+    if (env->pc != old_pc &&
+        kvm_set_one_reg(cs, PENGUIN_CORE_REG(regs.pc), &env->pc)) {
+        return false;
+    }
+    return true;
+}
+
 static void kvm_arm_handle_smccc_hypercall(CPUState *cs, struct kvm_run *run)
 {
     CPUARMState *env = &ARM_CPU(cs)->env;
     uint64_t ret = 0;
+    bool was_dirty;
 
     /*
      * Peek at the hypercall number before pulling in the whole vCPU, which
@@ -1632,6 +1683,7 @@ static void kvm_arm_handle_smccc_hypercall(CPUState *cs, struct kvm_run *run)
         }
     }
 
+    was_dirty = cs->vcpu_dirty;
     kvm_cpu_synchronize_state(cs);
 
     if (run->hypercall.nr != PENGUIN_SMCCC_HYPERCALL || !is_a64(env)) {
@@ -1644,6 +1696,10 @@ static void kvm_arm_handle_smccc_hypercall(CPUState *cs, struct kvm_run *run)
         return;
     }
 
+    if (!was_dirty) {
+        penguin_snapshot_env(env);
+    }
+
     if (penguin_handle_guest_hypercall(cs, env->xregs[8],
                                        env->xregs[6], env->xregs[1],
                                        env->xregs[2], env->xregs[3],
@@ -1651,6 +1707,11 @@ static void kvm_arm_handle_smccc_hypercall(CPUState *cs, struct kvm_run *run)
         env->xregs[0] = ret;
     } else {
         env->xregs[0] = env->xregs[6];
+    }
+
+    if (!was_dirty && cs->vcpu_dirty && penguin_put_changed_gprs(cs, env)) {
+        /* KVM now holds everything the handler changed. */
+        cs->vcpu_dirty = false;
     }
 }
 
