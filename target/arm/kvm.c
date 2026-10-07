@@ -60,6 +60,22 @@
  * the TCG helper, a5 is 0 and an unhandled call returns argument 0.
  */
 #define PENGUIN_SMCCC_HYPERCALL 0xC3001337u
+
+/*
+ * The hypercall mailbox doorbell (igloo_driver portal/mailbox.h). The call's
+ * number, arguments, buffers and result live in a guest-physical page that
+ * the host maps directly, so this exit reads and writes no vCPU registers.
+ * It reaches the host as hypercall IGLOO_HYPER_MAILBOX.
+ */
+#define PENGUIN_SMCCC_MAILBOX   0xC3001338u
+#define IGLOO_HYPER_MAILBOX     0x7905u
+
+/* Lets the host side see that this QEMU has the no-sync doorbell path. */
+bool __attribute__((visibility("default"))) penguin_kvm_mailbox_supported(void);
+bool penguin_kvm_mailbox_supported(void)
+{
+    return true;
+}
 #define SMCCC_RET_NOT_SUPPORTED ((uint64_t)-1)
 
 const KVMCapabilityInfo kvm_arch_required_capabilities[] = {
@@ -622,7 +638,7 @@ static void kvm_arm_install_penguin_smccc_filter(KVMState *s)
 {
     struct kvm_smccc_filter filter = {
         .base = PENGUIN_SMCCC_HYPERCALL,
-        .nr_functions = 1,
+        .nr_functions = 2,      /* PENGUIN_SMCCC_HYPERCALL, PENGUIN_SMCCC_MAILBOX */
         .action = KVM_SMCCC_FILTER_FWD_TO_USER,
     };
     struct kvm_device_attr attr = {
@@ -1612,6 +1628,18 @@ static void kvm_arm_handle_smccc_hypercall(CPUState *cs, struct kvm_run *run)
 {
     CPUARMState *env = &ARM_CPU(cs)->env;
     uint64_t ret = 0;
+
+    if (run->hypercall.nr == PENGUIN_SMCCC_MAILBOX) {
+        /*
+         * Neither pull nor push the vCPU: the answer goes in the mailbox, and
+         * the PC is already past the HVC. A handler that does need live state
+         * calls penguin_sync_cpu_state(), which also marks the vCPU dirty so
+         * its changes are pushed before the next KVM_RUN.
+         */
+        penguin_handle_guest_hypercall(cs, IGLOO_HYPER_MAILBOX,
+                                       0, 0, 0, 0, 0, 0, &ret);
+        return;
+    }
 
     /*
      * Peek at the hypercall number before pulling in the whole vCPU, which
