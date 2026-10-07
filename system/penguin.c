@@ -72,6 +72,13 @@ penguin_guest_hypercall_registered(uint64_t nr)
            g_hash_table_contains(penguin_guest_hypercall_numbers, &nr);
 }
 
+bool penguin_guest_hypercall_wanted(uint64_t nr)
+{
+    return !penguin_guest_hypercall_numbers ||
+           g_hash_table_size(penguin_guest_hypercall_numbers) == 0 ||
+           g_hash_table_contains(penguin_guest_hypercall_numbers, &nr);
+}
+
 void __attribute__((visibility("default")))
 set_penguin_guest_hypercall_callback(penguin_guest_hypercall_cb_t cb,
                                      void *opaque)
@@ -100,6 +107,14 @@ bool penguin_handle_guest_hypercall(CPUState *cs, uint64_t nr,
     }
 
     if (kvm_penguin_hypercall_cb) {
+        /*
+         * Answer unregistered numbers here rather than crossing into the
+         * (Python) callback: the guest kernel issues some hypercalls nobody
+         * listens for, at a high rate.
+         */
+        if (!penguin_guest_hypercall_wanted(nr)) {
+            return false;
+        }
         return kvm_penguin_hypercall_cb(cs, nr, a0, a1, a2, a3, a4, a5,
                                         ret) == 0;
     }
