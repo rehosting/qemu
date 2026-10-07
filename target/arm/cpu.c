@@ -131,6 +131,11 @@ int arm_cpu_mmu_index(CPUState *cs, bool ifetch)
     return arm_env_mmu_index(cpu_env(cs));
 }
 
+static int arm_cpu_user_mmu_index(CPUState *cs)
+{
+    return arm_to_core_mmu_idx(arm_mmu_idx_el(cpu_env(cs), 0));
+}
+
 #endif /* CONFIG_TCG */
 
 #ifndef CONFIG_USER_ONLY
@@ -2543,6 +2548,7 @@ static const TCGCPUOps arm_tcg_ops = {
     .debug_excp_handler = arm_debug_excp_handler,
     .restore_state_to_opc = arm_restore_state_to_opc,
     .mmu_index = arm_cpu_mmu_index,
+    .user_mmu_index = arm_cpu_user_mmu_index,
 
 #ifdef CONFIG_USER_ONLY
     .record_sigsegv = arm_cpu_record_sigsegv,

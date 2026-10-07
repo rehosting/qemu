@@ -370,6 +370,7 @@ typedef struct CPUNegativeOffsetState {
     uint64_t plugin_mem_value_low;
     uint64_t plugin_mem_value_high;
     int32_t plugin_cb_flags;
+    uintptr_t plugin_cb_ra;
 #endif
     IcountDecr icount_decr;
     bool can_do_io;

@@ -390,6 +390,62 @@ void plugin_register_inline_op_on_entry(GArray **arr,
     dyn_cb->inline_insn = inline_cb;
 }
 
+/*
+ * Callbacks that may leave the TB (QEMU_PLUGIN_CB_RW_REGS_PC) are entered
+ * through a trampoline that records the host return address into the TB.
+ * With it, APIs called from the callback can unwind the guest state to the
+ * start of the instrumented instruction (cpu_restore_state) and raise a
+ * precise guest exception there, see qemu_plugin_read_memory_vaddr_fault().
+ */
+struct plugin_cb_ra_tramp {
+    qemu_plugin_vcpu_udata_cb_t cb;
+    void *udata;
+};
+
+QEMU_DISABLE_CFI __attribute__((noinline))
+static void plugin_cb_ra_trampoline(uint32_t cpu_index, void *opaque)
+{
+    struct plugin_cb_ra_tramp *t = opaque;
+    CPUState *cpu = current_cpu;
+
+    cpu->neg.plugin_cb_ra = (uintptr_t)__builtin_return_address(0);
+    t->cb(cpu_index, t->udata);
+    cpu->neg.plugin_cb_ra = 0;
+}
+
+static guint plugin_cb_ra_hash(gconstpointer p)
+{
+    const struct plugin_cb_ra_tramp *t = p;
+    return g_direct_hash(t->cb) ^ g_direct_hash(t->udata);
+}
+
+static gboolean plugin_cb_ra_equal(gconstpointer a, gconstpointer b)
+{
+    const struct plugin_cb_ra_tramp *x = a, *y = b;
+    return x->cb == y->cb && x->udata == y->udata;
+}
+
+/* Records live as long as any TB may call them, i.e. forever. */
+static struct plugin_cb_ra_tramp *
+plugin_cb_ra_record(qemu_plugin_vcpu_udata_cb_t cb, void *udata)
+{
+    static GMutex lock;
+    static GHashTable *records;
+    struct plugin_cb_ra_tramp key = { cb, udata }, *t;
+
+    g_mutex_lock(&lock);
+    if (!records) {
+        records = g_hash_table_new(plugin_cb_ra_hash, plugin_cb_ra_equal);
+    }
+    t = g_hash_table_lookup(records, &key);
+    if (!t) {
+        t = g_memdup2(&key, sizeof(key));
+        g_hash_table_add(records, t);
+    }
+    g_mutex_unlock(&lock);
+    return t;
+}
+
 void plugin_register_dyn_cb__udata(GArray **arr,
                                    qemu_plugin_vcpu_udata_cb_t cb,
                                    enum qemu_plugin_cb_flags flags,
@@ -409,6 +465,11 @@ void plugin_register_dyn_cb__udata(GArray **arr,
                               dh_typemask(ptr, 2))
     };
     assert((unsigned)flags < ARRAY_SIZE(info));
+
+    if (flags == QEMU_PLUGIN_CB_RW_REGS_PC) {
+        udata = plugin_cb_ra_record(cb, udata);
+        cb = plugin_cb_ra_trampoline;
+    }
 
     struct qemu_plugin_dyn_cb *dyn_cb = plugin_get_dyn_cb(arr);
     struct qemu_plugin_regular_cb regular_cb = { .f.vcpu_udata = cb,

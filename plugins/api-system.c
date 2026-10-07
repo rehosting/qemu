@@ -17,6 +17,11 @@
 #include "hw/core/boards.h"
 #include "qemu/plugin-memory.h"
 #include "qemu/plugin.h"
+#include "accel/tcg/cpu-ops.h"
+#include "accel/tcg/probe.h"
+#include "accel/tcg/cpu-mmu-index.h"
+#include "exec/target_page.h"
+#include "exec/tlb-flags.h"
 
 /*
  * In system mode we cannot trace the binary being executed so the
@@ -128,4 +133,72 @@ void qemu_plugin_update_ns(const void *handle, int64_t new_time)
                          advance_virtual_time__async,
                          RUN_ON_CPU_HOST_ULONG(new_time));
     }
+}
+
+/*
+ * Consistent virtual memory reads
+ */
+
+int qemu_plugin_read_memory_vaddr_fault(uint64_t addr, GByteArray *data,
+                                        size_t len,
+                                        enum qemu_plugin_vaddr_mode mode,
+                                        bool fault)
+{
+    CPUState *cpu = current_cpu;
+    CPUArchState *env;
+    size_t done = 0, page_size = qemu_target_page_size();
+    int mmu_idx;
+
+    g_assert(cpu);
+    env = cpu_env(cpu);
+
+    if (len == 0) {
+        return QEMU_PLUGIN_VADDR_UNMAPPED;
+    }
+    if (mode == QEMU_PLUGIN_VADDR_USER) {
+        if (!cpu->cc->tcg_ops->user_mmu_index) {
+            return QEMU_PLUGIN_VADDR_BAD_MODE;
+        }
+        mmu_idx = cpu->cc->tcg_ops->user_mmu_index(cpu);
+    } else {
+        mmu_idx = cpu_mmu_index(cpu, false);
+    }
+
+    g_byte_array_set_size(data, len);
+
+    while (done < len) {
+        vaddr a = addr + done;
+        size_t chunk = MIN(len - done, page_size - (a & (page_size - 1)));
+        CPUTLBEntryFull *full;
+        void *host;
+        int flags;
+
+        /* Never faults, never triggers plugin memory instrumentation. */
+        flags = probe_access_full_mmu(env, a, 0, MMU_DATA_LOAD, mmu_idx,
+                                      &host, &full);
+        if (flags & TLB_INVALID_MASK) {
+            uintptr_t ra = cpu->neg.plugin_cb_ra;
+
+            if (!fault || !ra ||
+                qemu_plugin_get_cb_flags() != QEMU_PLUGIN_CB_RW_REGS_PC) {
+                return QEMU_PLUGIN_VADDR_UNMAPPED;
+            }
+            /*
+             * Raise the exception a guest load at the start of the current
+             * instruction would take (#PF, data abort, TLBL, DSI ...).  The
+             * guest resolves it and resumes at the same instruction, so the
+             * callback runs again.  Returns only if the translation became
+             * valid in the meantime.
+             */
+            probe_access(env, a, 0, MMU_DATA_LOAD, mmu_idx, ra);
+            continue;
+        }
+        if (flags & TLB_MMIO) {
+            /* Not RAM: a read could have device side effects. */
+            return QEMU_PLUGIN_VADDR_IO;
+        }
+        memcpy(data->data + done, host, chunk);
+        done += chunk;
+    }
+    return QEMU_PLUGIN_VADDR_OK;
 }

@@ -99,6 +99,12 @@ struct TCGCPUOps {
 
     /** @mmu_index: Callback for choosing softmmu mmu index */
     int (*mmu_index)(CPUState *cpu, bool ifetch);
+    /**
+     * @user_mmu_index: Callback for the mmu index an unprivileged
+     * (user-mode) data access would use from the current CPU state,
+     * e.g. what AArch64 LDTR or x86 CPL3 uses.  Optional.
+     */
+    int (*user_mmu_index)(CPUState *cpu);
 
 #ifdef CONFIG_USER_ONLY
     /**

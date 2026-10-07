@@ -1133,6 +1133,57 @@ bool qemu_plugin_write_register(struct qemu_plugin_register *handle,
                                 GByteArray *buf);
 
 /**
+ * enum qemu_plugin_vaddr_mode - privilege for a virtual memory read
+ *
+ * @QEMU_PLUGIN_VADDR_CURRENT: translate as a data load at the current
+ *                             privilege level (with its access controls)
+ * @QEMU_PLUGIN_VADDR_USER: translate as an unprivileged data load, as
+ *                          e.g. AArch64 LDTR or an x86 CPL3 access would
+ */
+enum qemu_plugin_vaddr_mode {
+    QEMU_PLUGIN_VADDR_CURRENT,
+    QEMU_PLUGIN_VADDR_USER,
+};
+
+enum qemu_plugin_vaddr_result {
+    QEMU_PLUGIN_VADDR_OK = 0,
+    QEMU_PLUGIN_VADDR_UNMAPPED = -1,
+    QEMU_PLUGIN_VADDR_IO = -2,
+    QEMU_PLUGIN_VADDR_BAD_MODE = -3,
+};
+
+/**
+ * qemu_plugin_read_memory_vaddr_fault() - read guest memory, paging it in
+ *
+ * @addr: guest virtual address
+ * @data: buffer, resized to @len on success
+ * @len: number of bytes
+ * @mode: privilege used for translation
+ * @fault: if a page has no valid translation, raise a guest fault
+ *
+ * Reads @len bytes through the guest MMU. Pages that are not RAM are
+ * never read (QEMU_PLUGIN_VADDR_IO), avoiding device side effects.
+ *
+ * If @fault is true and a page has no valid translation, this raises the
+ * exception a guest data load of @addr at the start of the instrumented
+ * instruction would take, and does not return. The guest handles it (for
+ * example by paging the address in) and resumes at the same instruction,
+ * which re-runs the callback. Callers must therefore be idempotent and
+ * must bound their retries. Faulting requires a callback registered with
+ * QEMU_PLUGIN_CB_RW_REGS_PC; otherwise QEMU_PLUGIN_VADDR_UNMAPPED is
+ * returned. Whether the guest can legally take the fault at this point
+ * (privilege, IRQ state, locks held, a valid mapping) is the caller's
+ * responsibility.
+ *
+ * Returns a qemu_plugin_vaddr_result.
+ */
+QEMU_PLUGIN_API
+int qemu_plugin_read_memory_vaddr_fault(uint64_t addr, GByteArray *data,
+                                        size_t len,
+                                        enum qemu_plugin_vaddr_mode mode,
+                                        bool fault);
+
+/**
  * qemu_plugin_set_pc() - set the program counter for the current vCPU
  *
  * @vaddr: the new virtual (guest) address for the program counter

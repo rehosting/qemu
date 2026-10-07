@@ -55,3 +55,11 @@ void qemu_plugin_update_ns(const void *handle, int64_t new_time)
 {
     qemu_log_mask(LOG_UNIMP, "user-mode can't control time");
 }
+
+int qemu_plugin_read_memory_vaddr_fault(uint64_t addr, GByteArray *data,
+                                        size_t len,
+                                        enum qemu_plugin_vaddr_mode mode,
+                                        bool fault)
+{
+    return QEMU_PLUGIN_VADDR_BAD_MODE;
+}

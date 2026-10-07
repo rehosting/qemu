@@ -562,6 +562,11 @@ static int mips_cpu_mmu_index(CPUState *cs, bool ifunc)
     return mips_env_mmu_index(cpu_env(cs));
 }
 
+static int mips_cpu_user_mmu_index(CPUState *cs)
+{
+    return MIPS_HFLAG_UM;
+}
+
 static TCGTBCPUState mips_get_tb_cpu_state(CPUState *cs)
 {
     CPUMIPSState *env = cpu_env(cs);
@@ -591,6 +596,7 @@ static const TCGCPUOps mips_tcg_ops = {
     .synchronize_from_tb = mips_cpu_synchronize_from_tb,
     .restore_state_to_opc = mips_restore_state_to_opc,
     .mmu_index = mips_cpu_mmu_index,
+    .user_mmu_index = mips_cpu_user_mmu_index,
 
 #if !defined(CONFIG_USER_ONLY)
     .tlb_fill = mips_cpu_tlb_fill,
