@@ -1189,6 +1189,10 @@ struct ArchCPU {
 
     /* Generic timer counter frequency, in Hz */
     uint64_t gt_cntfrq_hz;
+
+    /* user_access_window(): DACR to restore when the window closes */
+    uint64_t uaccess_saved_dacr;
+    bool uaccess_open;
 };
 
 typedef struct ARMCPUInfo {

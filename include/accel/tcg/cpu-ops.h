@@ -105,6 +105,14 @@ struct TCGCPUOps {
      * e.g. what AArch64 LDTR or x86 CPL3 uses.  Optional.
      */
     int (*user_mmu_index)(CPUState *cpu);
+    /**
+     * @user_access_window: Open (@open true) or close the window in which
+     * privileged code may access user memory, as an OS uaccess_enable()
+     * would (e.g. the ARM DACR user domain).  The window may stay open
+     * across a guest exception: the guest saves and restores it with the
+     * rest of the interrupted context.  Optional.
+     */
+    void (*user_access_window)(CPUState *cpu, bool open);
 
 #ifdef CONFIG_USER_ONLY
     /**

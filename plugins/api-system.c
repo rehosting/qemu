@@ -147,7 +147,8 @@ int qemu_plugin_read_memory_vaddr_fault(uint64_t addr, GByteArray *data,
     CPUState *cpu = current_cpu;
     CPUArchState *env;
     size_t done = 0, page_size = qemu_target_page_size();
-    int mmu_idx;
+    void (*window)(CPUState *, bool) = NULL;
+    int mmu_idx, ret = QEMU_PLUGIN_VADDR_OK;
 
     g_assert(cpu);
     env = cpu_env(cpu);
@@ -158,6 +159,10 @@ int qemu_plugin_read_memory_vaddr_fault(uint64_t addr, GByteArray *data,
     if (mode == QEMU_PLUGIN_VADDR_USER) {
         if (!cpu->cc->tcg_ops->user_mmu_index) {
             return QEMU_PLUGIN_VADDR_BAD_MODE;
+        }
+        window = cpu->cc->tcg_ops->user_access_window;
+        if (window) {
+            window(cpu, true);
         }
         mmu_idx = cpu->cc->tcg_ops->user_mmu_index(cpu);
     } else {
@@ -181,24 +186,31 @@ int qemu_plugin_read_memory_vaddr_fault(uint64_t addr, GByteArray *data,
 
             if (!fault || !ra ||
                 qemu_plugin_get_cb_flags() != QEMU_PLUGIN_CB_RW_REGS_PC) {
-                return QEMU_PLUGIN_VADDR_UNMAPPED;
+                ret = QEMU_PLUGIN_VADDR_UNMAPPED;
+                break;
             }
             /*
              * Raise the exception a guest load at the start of the current
              * instruction would take (#PF, data abort, TLBL, DSI ...).  The
              * guest resolves it and resumes at the same instruction, so the
              * callback runs again.  Returns only if the translation became
-             * valid in the meantime.
+             * valid in the meantime.  A user access window stays open:
+             * the guest saves it with the interrupted context and restores
+             * it when it resumes here; we close it on the way out.
              */
             probe_access(env, a, 0, MMU_DATA_LOAD, mmu_idx, ra);
             continue;
         }
         if (flags & TLB_MMIO) {
             /* Not RAM: a read could have device side effects. */
-            return QEMU_PLUGIN_VADDR_IO;
+            ret = QEMU_PLUGIN_VADDR_IO;
+            break;
         }
         memcpy(data->data + done, host, chunk);
         done += chunk;
     }
-    return QEMU_PLUGIN_VADDR_OK;
+    if (window) {
+        window(cpu, false);
+    }
+    return ret;
 }

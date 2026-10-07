@@ -136,6 +136,51 @@ static int arm_cpu_user_mmu_index(CPUState *cs)
     return arm_to_core_mmu_idx(arm_mmu_idx_el(cpu_env(cs), 0));
 }
 
+/*
+ * Short-descriptor translation checks domains.  Kernels that protect user
+ * memory with domains (Linux CPU_SW_DOMAIN_PAN) make the user domain "no
+ * access" outside uaccess routines; opening the window turns every
+ * no-access domain into "client" so the page tables' AP bits decide, just
+ * like uaccess_save_and_enable().
+ */
+static void arm_cpu_user_access_window(CPUState *cs, bool open)
+{
+    ARMCPU *cpu = ARM_CPU(cs);
+    CPUARMState *env = &cpu->env;
+    ARMMMUIdx idx = arm_mmu_idx(env);
+    uint64_t *dacr;
+
+    if (open && (arm_feature(env, ARM_FEATURE_M) || is_a64(env) ||
+                 arm_current_el(env) == 0 ||
+                 arm_s1_regime_using_lpae_format(env, idx))) {
+        return;
+    }
+    dacr = regime_el(idx) == 1 ? &env->cp15.dacr_ns : &env->cp15.dacr_s;
+    if (open) {
+        uint64_t v = *dacr;
+        for (int d = 0; d < 16; d++) {
+            if (((v >> (d * 2)) & 3) == 0) {
+                v |= 1ull << (d * 2);
+            }
+        }
+        if (v == *dacr) {
+            return;
+        }
+        if (!cpu->uaccess_open) {
+            cpu->uaccess_saved_dacr = *dacr;
+            cpu->uaccess_open = true;
+        }
+        *dacr = v;
+    } else {
+        if (!cpu->uaccess_open) {
+            return;
+        }
+        *dacr = cpu->uaccess_saved_dacr;
+        cpu->uaccess_open = false;
+    }
+    tlb_flush(cs);     /* domains are not tracked in the TLB */
+}
+
 #endif /* CONFIG_TCG */
 
 #ifndef CONFIG_USER_ONLY
@@ -2549,6 +2594,7 @@ static const TCGCPUOps arm_tcg_ops = {
     .restore_state_to_opc = arm_restore_state_to_opc,
     .mmu_index = arm_cpu_mmu_index,
     .user_mmu_index = arm_cpu_user_mmu_index,
+    .user_access_window = arm_cpu_user_access_window,
 
 #ifdef CONFIG_USER_ONLY
     .record_sigsegv = arm_cpu_record_sigsegv,
