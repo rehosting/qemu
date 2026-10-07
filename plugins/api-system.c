@@ -136,19 +136,24 @@ void qemu_plugin_update_ns(const void *handle, int64_t new_time)
 }
 
 /*
- * Consistent virtual memory reads
+ * Consistent virtual memory access
  */
 
-int qemu_plugin_read_memory_vaddr_fault(uint64_t addr, GByteArray *data,
-                                        size_t len,
-                                        enum qemu_plugin_vaddr_mode mode,
-                                        bool fault)
+/*
+ * Make every page of [addr, addr + len) accessible for @access_type, then
+ * copy.  Checking all pages before copying anything means a fault on a
+ * later page never leaves the guest looking at a partial write, and a read
+ * is taken while no guest code runs on this vCPU.
+ */
+static int vaddr_access_fault(uint64_t addr, uint8_t *buf, size_t len,
+                              enum qemu_plugin_vaddr_mode mode, bool fault,
+                              MMUAccessType access_type)
 {
     CPUState *cpu = current_cpu;
     CPUArchState *env;
-    size_t done = 0, page_size = qemu_target_page_size();
+    size_t page_size = qemu_target_page_size();
     void (*window)(CPUState *, bool) = NULL;
-    int mmu_idx, ret = QEMU_PLUGIN_VADDR_OK;
+    int mmu_idx, fault_idx, ret = QEMU_PLUGIN_VADDR_OK;
 
     g_assert(cpu);
     env = cpu_env(cpu);
@@ -165,52 +170,96 @@ int qemu_plugin_read_memory_vaddr_fault(uint64_t addr, GByteArray *data,
             window(cpu, true);
         }
         mmu_idx = cpu->cc->tcg_ops->user_mmu_index(cpu);
+        fault_idx = cpu->cc->tcg_ops->user_fault_mmu_index ?
+                    cpu->cc->tcg_ops->user_fault_mmu_index(cpu) : mmu_idx;
     } else {
-        mmu_idx = cpu_mmu_index(cpu, false);
+        mmu_idx = fault_idx = cpu_mmu_index(cpu, false);
     }
 
-    g_byte_array_set_size(data, len);
+    for (int copy = 0; copy < 2 && ret == QEMU_PLUGIN_VADDR_OK; copy++) {
+        size_t done = 0;
 
-    while (done < len) {
-        vaddr a = addr + done;
-        size_t chunk = MIN(len - done, page_size - (a & (page_size - 1)));
-        CPUTLBEntryFull *full;
-        void *host;
-        int flags;
+        while (done < len) {
+            vaddr a = addr + done;
+            size_t chunk = MIN(len - done,
+                               page_size - (a & (page_size - 1)));
+            CPUTLBEntryFull *full;
+            void *host;
+            int flags;
 
-        /* Never faults, never triggers plugin memory instrumentation. */
-        flags = probe_access_full_mmu(env, a, 0, MMU_DATA_LOAD, mmu_idx,
-                                      &host, &full);
-        if (flags & TLB_INVALID_MASK) {
-            uintptr_t ra = cpu->neg.plugin_cb_ra;
+            /*
+             * Never faults, never triggers plugin memory instrumentation.
+             * For a store of the chunk it also invalidates translated code
+             * on the page and marks it dirty.
+             */
+            flags = probe_access_full_mmu(env, a,
+                                          copy && access_type == MMU_DATA_STORE
+                                          ? chunk : 0,
+                                          access_type, mmu_idx, &host, &full);
+            if (flags & TLB_INVALID_MASK) {
+                uintptr_t ra = cpu->neg.plugin_cb_ra;
 
-            if (!fault || !ra ||
-                qemu_plugin_get_cb_flags() != QEMU_PLUGIN_CB_RW_REGS_PC) {
-                ret = QEMU_PLUGIN_VADDR_UNMAPPED;
+                if (!fault || !ra ||
+                    qemu_plugin_get_cb_flags() != QEMU_PLUGIN_CB_RW_REGS_PC) {
+                    ret = QEMU_PLUGIN_VADDR_UNMAPPED;
+                    break;
+                }
+                /*
+                 * Raise the exception a guest load or store at the start of
+                 * the current instruction would take (#PF, data abort, TLBL,
+                 * TLBS, DSI ...).  The guest resolves it (pages the address
+                 * in, breaks copy-on-write, marks the page dirty) and resumes
+                 * at the same instruction, so the callback runs again.
+                 * Returns only if the translation became valid meanwhile.
+                 * A user access window stays open: the guest saves it with
+                 * the interrupted context and restores it when it resumes
+                 * here; we close it on the way out.
+                 */
+                probe_access(env, a, 0, access_type, fault_idx, ra);
+                flags = probe_access_full_mmu(env, a, 0, access_type, mmu_idx,
+                                              &host, &full);
+                if (flags & TLB_INVALID_MASK) {
+                    /* fault_idx may access it, mmu_idx may not */
+                    ret = QEMU_PLUGIN_VADDR_UNMAPPED;
+                    break;
+                }
+                continue;
+            }
+            if (flags & TLB_MMIO) {
+                /* Not RAM: an access could have device side effects. */
+                ret = QEMU_PLUGIN_VADDR_IO;
                 break;
             }
-            /*
-             * Raise the exception a guest load at the start of the current
-             * instruction would take (#PF, data abort, TLBL, DSI ...).  The
-             * guest resolves it and resumes at the same instruction, so the
-             * callback runs again.  Returns only if the translation became
-             * valid in the meantime.  A user access window stays open:
-             * the guest saves it with the interrupted context and restores
-             * it when it resumes here; we close it on the way out.
-             */
-            probe_access(env, a, 0, MMU_DATA_LOAD, mmu_idx, ra);
-            continue;
+            if (copy) {
+                if (access_type == MMU_DATA_STORE) {
+                    memcpy(host, buf + done, chunk);
+                } else {
+                    memcpy(buf + done, host, chunk);
+                }
+            }
+            done += chunk;
         }
-        if (flags & TLB_MMIO) {
-            /* Not RAM: a read could have device side effects. */
-            ret = QEMU_PLUGIN_VADDR_IO;
-            break;
-        }
-        memcpy(data->data + done, host, chunk);
-        done += chunk;
     }
     if (window) {
         window(cpu, false);
     }
     return ret;
+}
+
+int qemu_plugin_read_memory_vaddr_fault(uint64_t addr, GByteArray *data,
+                                        size_t len,
+                                        enum qemu_plugin_vaddr_mode mode,
+                                        bool fault)
+{
+    g_byte_array_set_size(data, len);
+    return vaddr_access_fault(addr, data->data, len, mode, fault,
+                              MMU_DATA_LOAD);
+}
+
+int qemu_plugin_write_memory_vaddr_fault(uint64_t addr, GByteArray *data,
+                                         enum qemu_plugin_vaddr_mode mode,
+                                         bool fault)
+{
+    return vaddr_access_fault(addr, data->data, data->len, mode, fault,
+                              MMU_DATA_STORE);
 }

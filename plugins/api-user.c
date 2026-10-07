@@ -63,3 +63,10 @@ int qemu_plugin_read_memory_vaddr_fault(uint64_t addr, GByteArray *data,
 {
     return QEMU_PLUGIN_VADDR_BAD_MODE;
 }
+
+int qemu_plugin_write_memory_vaddr_fault(uint64_t addr, GByteArray *data,
+                                         enum qemu_plugin_vaddr_mode mode,
+                                         bool fault)
+{
+    return QEMU_PLUGIN_VADDR_BAD_MODE;
+}

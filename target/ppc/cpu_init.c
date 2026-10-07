@@ -7226,6 +7226,44 @@ static int ppc_cpu_mmu_index(CPUState *cs, bool ifetch)
 {
     return ppc_env_mmu_index(cpu_env(cs), ifetch);
 }
+
+/* The data mmu index with MSR[PR] set: a problem-state access. */
+static int ppc_cpu_user_mmu_index(CPUState *cs)
+{
+    return ppc_env_mmu_index(cpu_env(cs), false) & ~1;
+}
+
+#if defined(TARGET_PPC64) && !defined(CONFIG_USER_ONLY)
+/*
+ * Kernels that protect user memory with the AMR (Linux KUAP on Book3S-64)
+ * block it outside uaccess routines, and check the interrupted context's
+ * AMR when a kernel-mode fault hits user memory.  Opening the window
+ * unblocks every key, as allow_user_access() would.
+ */
+static void ppc_cpu_user_access_window(CPUState *cs, bool open)
+{
+    PowerPCCPU *cpu = POWERPC_CPU(cs);
+    CPUPPCState *env = &cpu->env;
+
+    if (open) {
+        if (FIELD_EX64(env->msr, MSR, PR) || env->spr[SPR_AMR] == 0) {
+            return;
+        }
+        if (!cpu->uaccess_open) {
+            cpu->uaccess_saved_amr = env->spr[SPR_AMR];
+            cpu->uaccess_open = true;
+        }
+        env->spr[SPR_AMR] = 0;
+    } else {
+        if (!cpu->uaccess_open) {
+            return;
+        }
+        env->spr[SPR_AMR] = cpu->uaccess_saved_amr;
+        cpu->uaccess_open = false;
+    }
+    tlb_flush(cs);      /* the AMR is folded into cached permissions */
+}
+#endif
 #endif /* CONFIG_TCG */
 
 #ifndef CONFIG_USER_ONLY
@@ -7496,6 +7534,10 @@ static const TCGCPUOps ppc_tcg_ops = {
   .get_tb_cpu_state = ppc_get_tb_cpu_state,
   .restore_state_to_opc = ppc_restore_state_to_opc,
   .mmu_index = ppc_cpu_mmu_index,
+  .user_mmu_index = ppc_cpu_user_mmu_index,
+#if defined(TARGET_PPC64) && !defined(CONFIG_USER_ONLY)
+  .user_access_window = ppc_cpu_user_access_window,
+#endif
 
 #ifdef CONFIG_USER_ONLY
   .record_sigsegv = ppc_cpu_record_sigsegv,

@@ -106,6 +106,15 @@ struct TCGCPUOps {
      */
     int (*user_mmu_index)(CPUState *cpu);
     /**
+     * @user_fault_mmu_index: Callback for the mmu index the OS's own
+     * user-memory accessors (copy_from_user) use from the current CPU
+     * state, e.g. x86 supervisor with SMAP lifted by EFLAGS.AC.  Faults
+     * for user-mode plugin accesses are raised with it, so the guest sees
+     * exactly the fault those accessors would take.  Optional; defaults
+     * to @user_mmu_index.
+     */
+    int (*user_fault_mmu_index)(CPUState *cpu);
+    /**
      * @user_access_window: Open (@open true) or close the window in which
      * privileged code may access user memory, as an OS uaccess_enable()
      * would (e.g. the ARM DACR user domain).  The window may stay open

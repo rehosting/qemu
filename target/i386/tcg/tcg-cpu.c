@@ -137,6 +137,42 @@ static int x86_cpu_user_mmu_index(CPUState *cs)
 }
 
 #ifndef CONFIG_USER_ONLY
+/*
+ * Kernel user-memory accessors run at CPL0 with SMAP lifted by stac
+ * (EFLAGS.AC), so their page faults carry no U bit, and Linux checks the
+ * interrupted EFLAGS.AC to tell them from SMAP violations.
+ */
+static int x86_cpu_user_fault_mmu_index(CPUState *cs)
+{
+    CPUX86State *env = cpu_env(cs);
+    unsigned pl = env->hflags & HF_CPL_MASK;
+
+    if (pl == 3) {
+        return x86_mmu_index_pl(env, 3);
+    }
+    return MMU_KNOSMAP64_IDX + ((env->hflags & HF_CS64_MASK) ? 0 : 1);
+}
+
+static void x86_cpu_user_access_window(CPUState *cs, bool open)
+{
+    X86CPU *cpu = X86_CPU(cs);
+    CPUX86State *env = &cpu->env;
+
+    if (open) {
+        if ((env->hflags & HF_CPL_MASK) == 3 ||
+            !(env->hflags & HF_SMAP_MASK) || (env->eflags & AC_MASK)) {
+            return;
+        }
+        env->eflags |= AC_MASK;     /* stac */
+        cpu->uaccess_open = true;
+    } else if (cpu->uaccess_open) {
+        env->eflags &= ~AC_MASK;    /* clac */
+        cpu->uaccess_open = false;
+    }
+}
+#endif
+
+#ifndef CONFIG_USER_ONLY
 static bool x86_debug_check_breakpoint(CPUState *cs)
 {
     X86CPU *cpu = X86_CPU(cs);
@@ -176,6 +212,10 @@ const TCGCPUOps x86_tcg_ops = {
     .restore_state_to_opc = x86_restore_state_to_opc,
     .mmu_index = x86_cpu_mmu_index,
     .user_mmu_index = x86_cpu_user_mmu_index,
+#ifndef CONFIG_USER_ONLY
+    .user_fault_mmu_index = x86_cpu_user_fault_mmu_index,
+    .user_access_window = x86_cpu_user_access_window,
+#endif
     .cpu_exec_enter = x86_cpu_exec_enter,
     .cpu_exec_exit = x86_cpu_exec_exit,
 #ifdef CONFIG_USER_ONLY

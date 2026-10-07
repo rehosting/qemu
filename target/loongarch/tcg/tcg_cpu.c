@@ -306,6 +306,13 @@ static int loongarch_cpu_mmu_index(CPUState *cs, bool ifetch)
     return MMU_DA_IDX;
 }
 
+static int loongarch_cpu_user_mmu_index(CPUState *cs)
+{
+    /* PLV3 when paging is on; direct address translation otherwise */
+    return loongarch_cpu_mmu_index(cs, false) == MMU_DA_IDX ? MMU_DA_IDX
+                                                            : MMU_USER_IDX;
+}
+
 const TCGCPUOps loongarch_tcg_ops = {
     .guest_default_memory_order = 0,
     .mttcg_supported = true,
@@ -316,6 +323,7 @@ const TCGCPUOps loongarch_tcg_ops = {
     .synchronize_from_tb = loongarch_cpu_synchronize_from_tb,
     .restore_state_to_opc = loongarch_restore_state_to_opc,
     .mmu_index = loongarch_cpu_mmu_index,
+    .user_mmu_index = loongarch_cpu_user_mmu_index,
 
 #ifndef CONFIG_USER_ONLY
     .tlb_fill = loongarch_cpu_tlb_fill,

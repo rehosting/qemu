@@ -2512,6 +2512,9 @@ struct ArchCPU {
     int32_t hv_max_vps;
 
     bool xen_vapic;
+
+    /* user_access_window(): the window set EFLAGS.AC */
+    bool uaccess_open;
 };
 
 typedef struct X86CPUModel X86CPUModel;

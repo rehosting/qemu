@@ -1184,6 +1184,32 @@ int qemu_plugin_read_memory_vaddr_fault(uint64_t addr, GByteArray *data,
                                         bool fault);
 
 /**
+ * qemu_plugin_write_memory_vaddr_fault() - write guest memory, paging it in
+ *
+ * @addr: guest virtual address
+ * @data: bytes to write (all of @data->len)
+ * @mode: privilege used for translation
+ * @fault: if a page is not writable, raise a guest fault
+ *
+ * Writes through the guest MMU with the page permissions of @mode, like a
+ * guest store would: a page that is not present or not writable (absent,
+ * swapped out, copy-on-write, clean under software dirty tracking) is
+ * handed to the guest as a store fault, exactly as for
+ * qemu_plugin_read_memory_vaddr_fault().  Nothing is written until every
+ * page of the range is writable, so the guest never resumes with a partial
+ * write.  A read-only mapping is never written behind the guest's back:
+ * the guest refuses the fault (SIGSEGV, or an oops in kernel mode unless
+ * the caller handles it) and the write fails.  Translated code on the
+ * written pages is invalidated.  Pages that are not RAM are never written.
+ *
+ * Returns a qemu_plugin_vaddr_result.
+ */
+QEMU_PLUGIN_API
+int qemu_plugin_write_memory_vaddr_fault(uint64_t addr, GByteArray *data,
+                                         enum qemu_plugin_vaddr_mode mode,
+                                         bool fault);
+
+/**
  * qemu_plugin_set_pc() - set the program counter for the current vCPU
  *
  * @vaddr: the new virtual (guest) address for the program counter

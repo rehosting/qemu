@@ -1534,6 +1534,10 @@ struct ArchCPU {
     /* Those resources are used only during code translation */
     /* opcode handlers */
     opc_handler_t *opcodes[PPC_CPU_OPCODES_LEN];
+
+    /* user_access_window(): AMR to restore when the window closes */
+    target_ulong uaccess_saved_amr;
+    bool uaccess_open;
 };
 
 /**

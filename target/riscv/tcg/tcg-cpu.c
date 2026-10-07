@@ -98,6 +98,40 @@ static int riscv_cpu_mmu_index(CPUState *cs, bool ifetch)
     return riscv_env_mmu_index(cpu_env(cs), ifetch);
 }
 
+static int riscv_cpu_user_mmu_index(CPUState *cs)
+{
+    CPURISCVState *env = cpu_env(cs);
+
+    return PRV_U | (env->virt_enabled ? MMU_2STAGE_BIT : 0);
+}
+
+#ifndef CONFIG_USER_ONLY
+/*
+ * Supervisor code may touch user pages only with sstatus.SUM set, and
+ * Linux treats a kernel-mode fault on user memory with SUM clear as fatal.
+ * Opening the window sets SUM, as __enable_user_access() would.
+ */
+static void riscv_cpu_user_access_window(CPUState *cs, bool open)
+{
+    RISCVCPU *cpu = RISCV_CPU(cs);
+    CPURISCVState *env = &cpu->env;
+
+    if (env->virt_enabled) {
+        return;
+    }
+    if (open) {
+        if (env->priv != PRV_S || (env->mstatus & MSTATUS_SUM)) {
+            return;
+        }
+        env->mstatus |= MSTATUS_SUM;
+        cpu->uaccess_open = true;
+    } else if (cpu->uaccess_open) {
+        env->mstatus &= ~MSTATUS_SUM;
+        cpu->uaccess_open = false;
+    }
+}
+#endif
+
 static TCGTBCPUState riscv_get_tb_cpu_state(CPUState *cs)
 {
     CPURISCVState *env = cpu_env(cs);
@@ -278,6 +312,10 @@ const TCGCPUOps riscv_tcg_ops = {
     .synchronize_from_tb = riscv_cpu_synchronize_from_tb,
     .restore_state_to_opc = riscv_restore_state_to_opc,
     .mmu_index = riscv_cpu_mmu_index,
+    .user_mmu_index = riscv_cpu_user_mmu_index,
+#ifndef CONFIG_USER_ONLY
+    .user_access_window = riscv_cpu_user_access_window,
+#endif
 
 #ifndef CONFIG_USER_ONLY
     .tlb_fill = riscv_cpu_tlb_fill,
