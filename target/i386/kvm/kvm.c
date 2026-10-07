@@ -71,6 +71,7 @@
 #include "exec/memattrs.h"
 #include "exec/target_page.h"
 #include "trace.h"
+#include "qemu/plugin-hw.h"
 
 #include CONFIG_DEVICES
 
@@ -3450,6 +3451,134 @@ static int xen_init(MachineState *ms, KVMState *s)
 #endif
 }
 
+/*
+ * Plugin guest-memory access under KVM (see qemu/plugin-hw.h): walk the
+ * guest page tables as the MMU would, and hand misses to the guest as #PF.
+ */
+static int kvm_plugin_translate(CPUState *cs, vaddr addr,
+                                MMUAccessType access_type, bool user,
+                                hwaddr *phys, uint64_t *fault)
+{
+    CPUX86State *env = &X86_CPU(cs)->env;
+    bool cpl3 = (env->hflags & HF_CPL_MASK) == 3;
+    bool as_user = user || cpl3;
+    bool wr = access_type == MMU_DATA_STORE;
+    /* the error code of a fault taken at this instruction */
+    uint32_t err = (wr ? PG_ERROR_W_MASK : 0) | (cpl3 ? PG_ERROR_U_MASK : 0);
+    bool us = true, rw = true;
+    int levels, shift = 12;
+    hwaddr table;
+
+    if (!(env->cr[0] & CR0_PG_MASK)) {
+        *phys = addr;
+        return 0;
+    }
+    if (!(env->hflags & HF_LMA_MASK)) {
+        return -1;                      /* legacy paging: not implemented */
+    }
+    levels = (env->cr[4] & CR4_LA57_MASK) ? 5 : 4;
+    if ((int64_t)addr >> (levels * 9 + 11) != (int64_t)addr >> 63) {
+        return -1;                      /* non-canonical: #GP, not #PF */
+    }
+    table = env->cr[3] & PG_ADDRESS_MASK;
+    for (int lvl = levels; lvl >= 1; lvl--) {
+        uint64_t pte;
+
+        shift = 12 + 9 * (lvl - 1);
+        pte = x86_ldq_phys(cs, table + (((addr >> shift) & 0x1ff) << 3));
+        if (!(pte & PG_PRESENT_MASK)) {
+            *fault = err;
+            return 1;
+        }
+        us &= !!(pte & PG_USER_MASK);
+        rw &= !!(pte & PG_RW_MASK);
+        table = pte & PG_ADDRESS_MASK;
+        if ((lvl == 2 || lvl == 3) && (pte & PG_PSE_MASK)) {
+            table &= ~(((hwaddr)1 << shift) - 1);
+            break;
+        }
+        shift = 12;
+    }
+    *phys = table | (addr & (((hwaddr)1 << shift) - 1));
+
+    err |= PG_ERROR_P_MASK;
+    if (as_user && !us) {
+        return -1;      /* supervisor page: no fault grants a user access */
+    }
+    if (!as_user && us && (env->cr[4] & CR4_SMAP_MASK) &&
+        !(env->eflags & AC_MASK)) {
+        *fault = err;   /* SMAP, as a supervisor access here would fault */
+        return 1;
+    }
+    if (wr && !rw && (as_user || (env->cr[0] & CR0_WP_MASK))) {
+        *fault = err;   /* copy-on-write, dirty tracking, or read-only */
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * Supervisor access to [addr, addr + len) within one page, without
+ * cpu_memory_rw_debug(): that syncs the whole vCPU, discarding what a
+ * plugin callback queued in env under the light sync.
+ */
+static bool kvm_plugin_rw_virt(CPUState *cs, vaddr addr, void *buf, int len,
+                               bool is_write)
+{
+    hwaddr pa;
+    uint64_t f;
+
+    if (kvm_plugin_translate(cs, addr, is_write ? MMU_DATA_STORE
+                                                : MMU_DATA_LOAD,
+                             false, &pa, &f)) {
+        return false;
+    }
+    return address_space_rw(cs->as, pa, MEMTXATTRS_UNSPECIFIED, buf, len,
+                            is_write) == MEMTX_OK;
+}
+
+static __thread bool plugin_raised;
+
+static int kvm_get_vcpu_events(X86CPU *cpu);
+
+static void kvm_plugin_raise(CPUState *cs, vaddr addr, uint64_t fault)
+{
+    CPUX86State *env = &X86_CPU(cs)->env;
+
+    if (!cs->vcpu_dirty) {
+        kvm_get_vcpu_events(X86_CPU(cs));  /* light sync: not fetched yet */
+    }
+    plugin_raised = true;
+    kvm_queue_exception(env, EXCP0E_PAGE, 1, addr);
+    env->has_error_code = 1;
+    env->error_code = fault;
+}
+
+/* As x86_cpu_user_access_window() under TCG: stac/clac around the access */
+static void kvm_plugin_window(CPUState *cs, bool open)
+{
+    X86CPU *cpu = X86_CPU(cs);
+    CPUX86State *env = &cpu->env;
+
+    if (open) {
+        if ((env->hflags & HF_CPL_MASK) == 3 ||
+            !(env->cr[4] & CR4_SMAP_MASK) || (env->eflags & AC_MASK)) {
+            return;
+        }
+        env->eflags |= AC_MASK;
+        cpu->uaccess_open = true;
+    } else if (cpu->uaccess_open) {
+        env->eflags &= ~AC_MASK;
+        cpu->uaccess_open = false;
+    }
+}
+
+static const QemuPluginHwOps kvm_plugin_hw_ops = {
+    .translate = kvm_plugin_translate,
+    .raise = kvm_plugin_raise,
+    .window = kvm_plugin_window,
+};
+
 int kvm_arch_init(MachineState *ms, KVMState *s)
 {
     int ret;
@@ -3460,6 +3589,8 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
     /*
      * Initialize confidential guest (SEV/TDX) context, if required
      */
+    qemu_plugin_set_hw_ops(&kvm_plugin_hw_ops);
+
     if (ms->cgs) {
         ret = confidential_guest_kvm_init(ms->cgs, &local_err);
         if (ret < 0) {
@@ -5912,11 +6043,19 @@ int kvm_arch_get_registers(CPUState *cs, Error **errp)
     return ret;
 }
 
+static void kvm_plugin_debug_init(CPUState *cs);
+
 void kvm_arch_pre_run(CPUState *cpu, struct kvm_run *run)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
     int ret;
+    static __thread bool plugin_debug_set;
+
+    if (!plugin_debug_set && qemu_plugin_bp_enabled()) {
+        kvm_plugin_debug_init(cpu);
+        plugin_debug_set = true;
+    }
 
     /* Inject NMI */
     if (cpu_test_interrupt(cpu, CPU_INTERRUPT_NMI | CPU_INTERRUPT_SMI)) {
@@ -6251,6 +6390,142 @@ void kvm_arch_remove_all_hw_breakpoints(void)
 
 static CPUWatchpoint hw_watchpoint;
 
+/* #PF handler entry, while a plugin fault is being delivered on this vCPU */
+static __thread target_ulong pf_catch;
+
+/* Load the plugin breakpoints into this vCPU's debug state (vCPU thread). */
+static void kvm_plugin_debug_init(CPUState *cs)
+{
+    static gsize inserted;
+
+    if (g_once_init_enter(&inserted)) {
+        int n;
+        const uint64_t *bp = qemu_plugin_hw_breakpoints(&n);
+
+        for (int i = 0; i < n; i++) {
+            /* shared with gdbstub's hardware breakpoints */
+            if (nb_hw_breakpoint == ARRAY_SIZE(hw_breakpoint)) {
+                warn_report("plugin breakpoint 0x%" PRIx64 " not set", bp[i]);
+                continue;
+            }
+            hw_breakpoint[nb_hw_breakpoint].addr = bp[i];
+            hw_breakpoint[nb_hw_breakpoint].len = 1;
+            hw_breakpoint[nb_hw_breakpoint].type = GDB_BREAKPOINT_HW;
+            nb_hw_breakpoint++;
+        }
+        g_once_init_leave(&inserted, 1);
+    }
+    kvm_update_guest_debug(cs, 0);
+}
+
+/*
+ * A plugin breakpoint, or a guest int3 that is not a gdbstub breakpoint:
+ * run the plugin callback.  Returns true if the plugin consumed the event.
+ */
+static bool kvm_plugin_debug(X86CPU *cpu, struct kvm_debug_exit_arch *arch_info)
+{
+    CPUState *cs = CPU(cpu);
+    CPUX86State *env = &cpu->env;
+    bool sw = false, hw = false, light, handled;
+    target_ulong eip;
+
+    if (!qemu_plugin_bp_enabled()) {
+        return false;
+    }
+    if (pf_catch && arch_info->exception == EXCP01_DB &&
+        (arch_info->dr6 & 1) && arch_info->pc == pf_catch) {
+        /* our #PF is being delivered: [err, rip, cs, rflags, rsp, ss] */
+        uint64_t fl;
+
+        if (!cs->vcpu_dirty) {
+            kvm_getput_regs(cpu, 0);
+        }
+        if (kvm_plugin_rw_virt(cs, env->regs[R_ESP] + 24, &fl, 8, false)) {
+            fl = cpu_to_le64(le64_to_cpu(fl) & ~(uint64_t)RF_MASK);
+            kvm_plugin_rw_virt(cs, env->regs[R_ESP] + 24, &fl, 8, true);
+        }
+        pf_catch = 0;
+        kvm_update_guest_debug(cs, 0);
+        return true;
+    }
+    if (arch_info->exception == EXCP03_INT3) {
+        sw = !kvm_find_sw_breakpoint(cs, arch_info->pc);
+    } else if (arch_info->exception == EXCP01_DB &&
+               !(arch_info->dr6 & DR6_BS)) {
+        for (int n = 0; n < nb_hw_breakpoint; n++) {
+            if ((arch_info->dr6 & (1 << n)) &&
+                hw_breakpoint[n].type == GDB_BREAKPOINT_HW &&
+                qemu_plugin_is_hw_breakpoint(hw_breakpoint[n].addr)) {
+                hw = true;
+            }
+        }
+    }
+    if (!sw && !hw) {
+        return false;
+    }
+    /*
+     * Light sync: the callback needs the GPRs and the paging state, not
+     * the whole vCPU (MSRs, XSAVE, ...: ~20 ioctls per exit).  Anything
+     * that syncs fully meanwhile makes env authoritative again.
+     */
+    light = !cs->vcpu_dirty;
+    if (light && (kvm_getput_regs(cpu, 0) ||
+                  (has_sregs2 ? kvm_get_sregs2(cpu) : kvm_get_sregs(cpu)))) {
+        cpu_synchronize_state(cs);
+        light = false;
+    }
+    plugin_raised = false;
+    eip = env->eip;
+    handled = qemu_plugin_vcpu_bp(cs, arch_info->pc, sw);
+    if (!handled) {
+        if (light && !cs->vcpu_dirty) {
+            kvm_getput_regs(cpu, 1);    /* the callback may have written */
+        }
+        return false;
+    }
+    if (hw && plugin_raised) {
+        /*
+         * KVM delivers the fault with RF set in the saved RFLAGS, as the
+         * CPU does for faults, so the guest would resume the hooked
+         * instruction without its breakpoint and the callback would never
+         * run again.  Stop this vCPU at the first instruction of the #PF
+         * handler and clear RF in the frame.  Nothing else executes on this
+         * vCPU in between, so its other breakpoints can be borrowed.
+         */
+        struct kvm_guest_debug dbg = {
+            .control = KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_HW_BP |
+                       KVM_GUESTDBG_USE_SW_BP,
+        };
+        uint8_t g[16];
+
+        if (kvm_plugin_rw_virt(cs, env->idt.base + EXCP0E_PAGE * 16, g,
+                               sizeof(g), false)) {
+            pf_catch = lduw_le_p(g) | (uint64_t)lduw_le_p(g + 6) << 16 |
+                       (uint64_t)ldl_le_p(g + 8) << 32;
+            dbg.arch.debugreg[0] = pf_catch;
+            dbg.arch.debugreg[7] = 0x0600 | 2;  /* G0, execute, 1 byte */
+            kvm_vcpu_ioctl(cs, KVM_SET_GUEST_DEBUG, &dbg);
+        }
+    }
+    if (env->eip == eip && !plugin_raised) {
+        if (sw) {
+            env->eip++;                 /* past the int3 */
+        } else {
+            env->eflags |= RF_MASK;     /* execute it; don't re-trigger */
+        }
+    }
+    if (light && !cs->vcpu_dirty) {
+        kvm_getput_regs(cpu, 1);
+        if (plugin_raised) {
+            kvm_put_vcpu_events(cpu, KVM_PUT_RUNTIME_STATE);
+            if (!has_exception_payload) {
+                has_sregs2 ? kvm_put_sregs2(cpu) : kvm_put_sregs(cpu); /* CR2 */
+            }
+        }
+    }
+    return true;
+}
+
 static int kvm_handle_debug(X86CPU *cpu,
                             struct kvm_debug_exit_arch *arch_info)
 {
@@ -6258,6 +6533,10 @@ static int kvm_handle_debug(X86CPU *cpu,
     CPUX86State *env = &cpu->env;
     int ret = 0;
     int n;
+
+    if (kvm_plugin_debug(cpu, arch_info)) {
+        return 0;
+    }
 
     if (arch_info->exception == EXCP01_DB) {
         if (arch_info->dr6 & DR6_BS) {
@@ -6316,7 +6595,7 @@ void kvm_arch_update_guest_debug(CPUState *cpu, struct kvm_guest_debug *dbg)
     };
     int n;
 
-    if (kvm_sw_breakpoints_active(cpu)) {
+    if (kvm_sw_breakpoints_active(cpu) || qemu_plugin_bp_enabled()) {
         dbg->control |= KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_SW_BP;
     }
     if (nb_hw_breakpoint > 0) {

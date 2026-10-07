@@ -22,6 +22,9 @@
 #include "accel/tcg/cpu-mmu-index.h"
 #include "exec/target_page.h"
 #include "exec/tlb-flags.h"
+#include "qemu/plugin-hw.h"
+#include "system/memory.h"
+#include "system/tcg.h"
 
 /*
  * In system mode we cannot trace the binary being executed so the
@@ -140,6 +143,149 @@ void qemu_plugin_update_ns(const void *handle, int64_t new_time)
  */
 
 /*
+ * Accelerators without a softmmu TLB (KVM): the target walks the guest page
+ * tables itself and queues the guest fault; breakpoints stand in for
+ * instruction callbacks.
+ */
+static const QemuPluginHwOps *hw_ops;
+static qemu_plugin_vcpu_bp_cb_t bp_cb;
+static void *bp_udata;
+static uint64_t hw_bps[4];
+static int n_hw_bps;
+/* Inside qemu_plugin_vcpu_bp() on this thread: cpu->jmp_env is ours */
+static __thread bool bp_armed;
+
+void qemu_plugin_set_hw_ops(const QemuPluginHwOps *ops)
+{
+    hw_ops = ops;
+}
+
+bool qemu_plugin_bp_enabled(void)
+{
+    return bp_cb;
+}
+
+const uint64_t *qemu_plugin_hw_breakpoints(int *n)
+{
+    *n = n_hw_bps;
+    return hw_bps;
+}
+
+bool qemu_plugin_is_hw_breakpoint(uint64_t pc)
+{
+    for (int i = 0; i < n_hw_bps; i++) {
+        if (hw_bps[i] == pc) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void qemu_plugin_register_vcpu_bp_cb(qemu_plugin_id_t id,
+                                     qemu_plugin_vcpu_bp_cb_t cb,
+                                     void *userdata)
+{
+    bp_cb = cb;
+    bp_udata = userdata;
+}
+
+int qemu_plugin_hw_breakpoint_insert(uint64_t vaddr)
+{
+    if (n_hw_bps == ARRAY_SIZE(hw_bps)) {
+        return -ENOBUFS;
+    }
+    hw_bps[n_hw_bps++] = vaddr;
+    return 0;
+}
+
+bool qemu_plugin_vcpu_bp(CPUState *cpu, uint64_t pc, bool sw)
+{
+    volatile bool handled = true;
+
+    if (!bp_cb) {
+        return false;
+    }
+    qemu_plugin_set_cb_flags(cpu, QEMU_PLUGIN_CB_RW_REGS_PC);
+    bp_armed = true;
+    if (sigsetjmp(cpu->jmp_env, 0) == 0) {
+        handled = bp_cb(cpu->cpu_index, pc, sw, bp_udata);
+    }
+    /* else qemu_plugin_set_pc(), or a guest fault was queued */
+    bp_armed = false;
+    qemu_plugin_set_cb_flags(cpu, QEMU_PLUGIN_CB_NO_REGS);
+    return handled;
+}
+
+static int vaddr_access_hw(CPUState *cpu, uint64_t addr, uint8_t *buf,
+                           size_t len, enum qemu_plugin_vaddr_mode mode,
+                           bool fault, MMUAccessType access_type)
+{
+    bool user = mode == QEMU_PLUGIN_VADDR_USER;
+    bool is_write = access_type == MMU_DATA_STORE;
+    size_t page_size = qemu_target_page_size();
+    int ret = QEMU_PLUGIN_VADDR_OK;
+
+    if (!hw_ops) {
+        return QEMU_PLUGIN_VADDR_BAD_MODE;
+    }
+    if (len == 0) {
+        return QEMU_PLUGIN_VADDR_UNMAPPED;
+    }
+    if (user && hw_ops->window) {
+        hw_ops->window(cpu, true);
+    }
+    for (int copy = 0; copy < 2 && ret == QEMU_PLUGIN_VADDR_OK; copy++) {
+        size_t done = 0;
+
+        while (done < len) {
+            vaddr a = addr + done;
+            size_t chunk = MIN(len - done,
+                               page_size - (a & (page_size - 1)));
+            hwaddr phys, xlat, l = chunk;
+            MemoryRegion *mr;
+            uint64_t f;
+            int t = hw_ops->translate(cpu, a, access_type, user, &phys, &f);
+
+            if (t > 0 && fault && bp_armed) {
+                /*
+                 * As under TCG: the guest takes the fault a load or store
+                 * at this instruction would, resolves it and re-executes
+                 * the instruction, which re-runs the breakpoint callback.
+                 */
+                hw_ops->raise(cpu, a, f);
+                siglongjmp(cpu->jmp_env, 1);
+            }
+            if (t != 0) {
+                ret = QEMU_PLUGIN_VADDR_UNMAPPED;
+                break;
+            }
+            WITH_RCU_READ_LOCK_GUARD() {
+                mr = address_space_translate(cpu->as, phys, &xlat, &l,
+                                             is_write,
+                                             MEMTXATTRS_UNSPECIFIED);
+                if (!memory_region_is_ram(mr) || memory_region_is_romd(mr) ||
+                    (is_write && memory_region_is_rom(mr)) || l < chunk) {
+                    /* Not RAM: an access could have device side effects. */
+                    ret = QEMU_PLUGIN_VADDR_IO;
+                }
+            }
+            if (ret != QEMU_PLUGIN_VADDR_OK) {
+                break;
+            }
+            if (copy) {
+                address_space_rw(cpu->as, phys, MEMTXATTRS_UNSPECIFIED,
+                                 buf + done, chunk, is_write);
+            }
+            done += chunk;
+        }
+    }
+    if (user && hw_ops->window) {
+        hw_ops->window(cpu, false);
+    }
+    return ret;
+}
+
+/*
  * Make every page of [addr, addr + len) accessible for @access_type, then
  * copy.  Checking all pages before copying anything means a fault on a
  * later page never leaves the guest looking at a partial write, and a read
@@ -156,6 +302,9 @@ static int vaddr_access_fault(uint64_t addr, uint8_t *buf, size_t len,
     int mmu_idx, fault_idx, ret = QEMU_PLUGIN_VADDR_OK;
 
     g_assert(cpu);
+    if (!tcg_enabled()) {
+        return vaddr_access_hw(cpu, addr, buf, len, mode, fault, access_type);
+    }
     env = cpu_env(cpu);
 
     if (len == 0) {

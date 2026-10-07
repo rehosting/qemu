@@ -1210,6 +1210,64 @@ int qemu_plugin_write_memory_vaddr_fault(uint64_t addr, GByteArray *data,
                                          bool fault);
 
 /**
+ * typedef qemu_plugin_vcpu_bp_cb_t - breakpoint callback
+ *
+ * @vcpu_index: the vCPU
+ * @pc: guest virtual address of the instruction about to execute
+ * @sw: true for a guest software breakpoint instruction (x86 int3) that
+ *      QEMU did not plant; false for a breakpoint requested with
+ *      qemu_plugin_hw_breakpoint_insert()
+ * @userdata: from registration
+ *
+ * For accelerators without instrumentation (KVM), where instruction
+ * callbacks never run.  The callback runs like an instruction callback
+ * registered with QEMU_PLUGIN_CB_RW_REGS_PC: registers can be read and
+ * written, qemu_plugin_set_pc() works, and the faulting memory accessors
+ * may raise a guest fault, after which the guest re-executes the
+ * instruction at @pc and the callback runs again.
+ *
+ * Returns true if the plugin consumed the event.  The guest then resumes
+ * at its (possibly changed) PC; if the PC is unchanged and no fault was
+ * raised, it executes the instruction at @pc (the hardware breakpoint does
+ * not re-trigger) or, for @sw, skips the breakpoint instruction.  Returns
+ * false to leave the event to QEMU: a stray @sw breakpoint is delivered to
+ * the guest.
+ */
+typedef bool (*qemu_plugin_vcpu_bp_cb_t)(unsigned int vcpu_index,
+                                         uint64_t pc, bool sw,
+                                         void *userdata);
+
+/**
+ * qemu_plugin_register_vcpu_bp_cb() - receive breakpoint events (KVM)
+ *
+ * @id: plugin ID
+ * @cb: callback
+ * @userdata: passed to @cb
+ *
+ * Also routes guest software breakpoint instructions to @cb.  One callback
+ * per QEMU instance.
+ */
+QEMU_PLUGIN_API
+void qemu_plugin_register_vcpu_bp_cb(qemu_plugin_id_t id,
+                                     qemu_plugin_vcpu_bp_cb_t cb,
+                                     void *userdata);
+
+/**
+ * qemu_plugin_hw_breakpoint_insert() - stop before @vaddr executes (KVM)
+ *
+ * @vaddr: guest virtual address of an instruction
+ *
+ * A hardware execution breakpoint, reported to the callback registered
+ * with qemu_plugin_register_vcpu_bp_cb().  KVM on x86 only (four in all,
+ * shared with gdbstub); no effect under TCG, where instruction callbacks
+ * do the job.  Call before the vCPUs run, e.g. from qemu_plugin_install().
+ *
+ * Returns 0, or a negative errno.
+ */
+QEMU_PLUGIN_API
+int qemu_plugin_hw_breakpoint_insert(uint64_t vaddr);
+
+/**
  * qemu_plugin_set_pc() - set the program counter for the current vCPU
  *
  * @vaddr: the new virtual (guest) address for the program counter
