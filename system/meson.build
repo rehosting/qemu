@@ -17,6 +17,8 @@ system_ss.add(files(
   'memory_mapping.c',
   'memory.c',
   'penguin.c',
+  'penguin-syscalls.c',
+  'penguin-osi.c',
   'physmem.c',
   'qdev-monitor.c',
   'qtest.c',
