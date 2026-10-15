@@ -47,6 +47,12 @@
 #include "exec/translation-block.h"
 #include "exec/translator.h"
 #include "disas/disas.h"
+#include "system/tcg.h"
+#include "qemu/rcu.h"
+#include "accel/tcg/hooks.h"
+#ifdef CONFIG_SOFTMMU
+#include "system/syscall-trap.h"
+#endif
 #include "plugin.h"
 
 /* Uninstall and Reset handlers */
@@ -489,12 +495,42 @@ bool qemu_plugin_write_register(struct qemu_plugin_register *reg,
     return (gdb_write_register(current_cpu, buf->data, GPOINTER_TO_INT(reg) >> 1) > 0);
 }
 
+void *qemu_plugin_register_ptr(struct qemu_plugin_register *reg,
+                               size_t *size)
+{
+#ifdef CONFIG_TCG
+    ptrdiff_t off;
+    unsigned n;
+
+    g_assert(current_cpu);
+
+    /* the program counter is not kept current in translated code */
+    if (!tcg_enabled() || (GPOINTER_TO_INT(reg) & 1) ||
+        !tcg_register_location(current_cpu, GPOINTER_TO_INT(reg) >> 1,
+                               &off, &n)) {
+        return NULL;
+    }
+    if (size) {
+        *size = n;
+    }
+    return (uint8_t *)cpu_env(current_cpu) + off;
+#else
+    return NULL;
+#endif
+}
+
 void qemu_plugin_set_pc(uint64_t vaddr)
 {
     g_assert(current_cpu);
 
     g_assert(qemu_plugin_get_cb_flags() == QEMU_PLUGIN_CB_RW_REGS_PC);
 
+#ifdef CONFIG_TCG
+    /* leaving the block: make lazily computed state (x86 flags) exact */
+    if (tcg_enabled() && current_cpu->neg.plugin_cb_ra) {
+        cpu_restore_state(current_cpu, current_cpu->neg.plugin_cb_ra);
+    }
+#endif
     cpu_set_pc(current_cpu, vaddr);
     cpu_loop_exit(current_cpu);
 }
@@ -509,12 +545,19 @@ bool qemu_plugin_read_memory_vaddr(uint64_t addr, GByteArray *data, size_t len)
 
     g_byte_array_set_size(data, len);
 
-    int result = cpu_memory_rw_debug(current_cpu, addr, data->data,
-                                     data->len, false);
-
-    if (result < 0) {
+#ifdef CONFIG_SOFTMMU
+    /*
+     * Pages the vCPU has in its TLB are copied straight from RAM; in a
+     * syscall-event callback that includes the kernel's TLBs.
+     */
+    if (!syscall_trap_read(current_cpu, addr, data->data, len)) {
         return false;
     }
+#else
+    if (cpu_memory_rw_debug(current_cpu, addr, data->data, len, false) < 0) {
+        return false;
+    }
+#endif
 
     return true;
 }
@@ -686,3 +729,104 @@ uint64_t qemu_plugin_u64_sum(qemu_plugin_u64 entry)
     return total;
 }
 
+
+#ifdef CONFIG_TCG
+struct qemu_plugin_hook {
+    struct rcu_head rcu;
+    TCGHook *hook;
+    qemu_plugin_vcpu_hook_cb_t cb;
+    void *udata;
+};
+
+/* Hooks run between instructions, never inside another callback. */
+static void plugin_hook_fn(CPUState *cpu, vaddr pc, void *opaque)
+{
+    struct qemu_plugin_hook *ph = opaque;
+
+    qemu_plugin_set_cb_flags(cpu, QEMU_PLUGIN_CB_RW_REGS_PC);
+    cpu->neg.plugin_cb_ra = tcg_hook_retaddr(cpu);
+    ph->cb(cpu->cpu_index, pc, ph->udata);
+    cpu->neg.plugin_cb_ra = 0;
+    qemu_plugin_set_cb_flags(cpu, QEMU_PLUGIN_CB_NO_REGS);
+}
+#endif
+
+struct qemu_plugin_hook *qemu_plugin_hook_insert(qemu_plugin_id_t id,
+                                                 uint64_t vaddr,
+                                                 qemu_plugin_vcpu_hook_cb_t cb,
+                                                 void *userdata)
+{
+#ifdef CONFIG_TCG
+    struct qemu_plugin_hook *ph;
+
+    if (!tcg_enabled() || !cb) {
+        return NULL;
+    }
+    ph = g_new0(struct qemu_plugin_hook, 1);
+    ph->cb = cb;
+    ph->udata = userdata;
+    ph->hook = tcg_hook_insert(vaddr, plugin_hook_fn, ph);
+    return ph;
+#else
+    return NULL;
+#endif
+}
+
+struct qemu_plugin_hook *
+qemu_plugin_hook_insert_cond(qemu_plugin_id_t id, uint64_t vaddr,
+                             qemu_plugin_vcpu_hook_cb_t cb, void *userdata,
+                             const struct qemu_plugin_hook_cond *conds,
+                             size_t nconds)
+{
+#ifdef CONFIG_TCG
+    static const TCGCond map[] = {
+        [QEMU_PLUGIN_HOOK_EQ] = TCG_COND_EQ,   [QEMU_PLUGIN_HOOK_NE] = TCG_COND_NE,
+        [QEMU_PLUGIN_HOOK_LT] = TCG_COND_LT,   [QEMU_PLUGIN_HOOK_LE] = TCG_COND_LE,
+        [QEMU_PLUGIN_HOOK_GT] = TCG_COND_GT,   [QEMU_PLUGIN_HOOK_GE] = TCG_COND_GE,
+        [QEMU_PLUGIN_HOOK_LTU] = TCG_COND_LTU, [QEMU_PLUGIN_HOOK_LEU] = TCG_COND_LEU,
+        [QEMU_PLUGIN_HOOK_GTU] = TCG_COND_GTU, [QEMU_PLUGIN_HOOK_GEU] = TCG_COND_GEU,
+    };
+    g_autofree TCGHookGuard *g = NULL;
+    struct qemu_plugin_hook *ph;
+
+    if (!tcg_enabled() || !cb || !conds || !nconds) {
+        return NULL;
+    }
+    g = g_new0(TCGHookGuard, nconds);
+    for (size_t i = 0; i < nconds; i++) {
+        const struct qemu_plugin_hook_cond *c = &conds[i];
+
+        bool host = c->kind == QEMU_PLUGIN_HOOK_OPERAND_HOST;
+
+        if ((c->size != 4 && c->size != 8) || c->cond >= G_N_ELEMENTS(map) ||
+            (host && !c->host) ||
+            (!host && c->kind != QEMU_PLUGIN_HOOK_OPERAND_REG)) {
+            return NULL;
+        }
+        g[i].kind = host ? TCG_HOOK_GUARD_HOST : TCG_HOOK_GUARD_REG;
+        g[i].regno = host ? -1 : GPOINTER_TO_INT(c->reg) >> 1;
+        g[i].host = c->host;
+        g[i].size = c->size;
+        g[i].cond = map[c->cond];
+        g[i].mask = c->mask;
+        g[i].value = c->value;
+    }
+    ph = g_new0(struct qemu_plugin_hook, 1);
+    ph->cb = cb;
+    ph->udata = userdata;
+    ph->hook = tcg_hook_insert_guarded(vaddr, plugin_hook_fn, ph, g, nconds);
+    return ph;
+#else
+    return NULL;
+#endif
+}
+
+void qemu_plugin_hook_remove(struct qemu_plugin_hook *ph)
+{
+#ifdef CONFIG_TCG
+    if (ph) {
+        tcg_hook_remove(ph->hook);
+        g_free_rcu(ph, rcu);
+    }
+#endif
+}

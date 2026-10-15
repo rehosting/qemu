@@ -1133,6 +1133,33 @@ bool qemu_plugin_write_register(struct qemu_plugin_register *handle,
                                 GByteArray *buf);
 
 /**
+ * qemu_plugin_register_ptr() - where a register lives, for direct access
+ *
+ * @handle: a @qemu_plugin_reg_handle handle
+ * @size: set to the register's size in bytes
+ *
+ * Returns a pointer to the register in the current vCPU's state, or NULL
+ * if it is not held in a single field (the program counter, flags that
+ * are computed lazily, registers built from several fields), or if
+ * registers are not kept in memory (only TCG keeps them there).
+ *
+ * The value is an integer in host byte order.  Reading through the
+ * pointer is valid wherever qemu_plugin_read_register() is, and gives the
+ * same value; writing is valid wherever qemu_plugin_write_register() is.
+ * The pointer stays valid for the life of the vCPU, so a plugin looks it
+ * up once per vCPU (e.g. in its vCPU init callback, or on first use in a
+ * callback) and keeps it.
+ *
+ * The location is found by writing the register through the gdbstub and
+ * checking that exactly one field changes, so call this for
+ * general-purpose registers, whose writes have no side effects; the
+ * register's value is restored before returning.
+ */
+QEMU_PLUGIN_API
+void *qemu_plugin_register_ptr(struct qemu_plugin_register *handle,
+                               size_t *size);
+
+/**
  * enum qemu_plugin_vaddr_mode - privilege for a virtual memory read
  *
  * @QEMU_PLUGIN_VADDR_CURRENT: translate as a data load at the current
@@ -1312,6 +1339,266 @@ void qemu_plugin_register_vcpu_bp_cb(qemu_plugin_id_t id,
  */
 QEMU_PLUGIN_API
 int qemu_plugin_hw_breakpoint_insert(uint64_t vaddr);
+
+/**
+ * typedef qemu_plugin_vcpu_hook_cb_t - address hook callback
+ *
+ * @vcpu_index: the vCPU
+ * @vaddr: guest virtual address of the hooked instruction, about to execute
+ * @userdata: as passed to qemu_plugin_hook_insert()
+ *
+ * Runs with read/write access to registers, and may call
+ * qemu_plugin_set_pc() and the faulting memory APIs
+ * (qemu_plugin_read_memory_vaddr_fault() etc.), like an instruction
+ * callback registered with QEMU_PLUGIN_CB_RW_REGS_PC.
+ */
+typedef void (*qemu_plugin_vcpu_hook_cb_t)(unsigned int vcpu_index,
+                                           uint64_t vaddr, void *userdata);
+
+struct qemu_plugin_hook;
+
+/**
+ * qemu_plugin_hook_insert() - call @cb before the instruction at @vaddr
+ *
+ * @id: the plugin
+ * @vaddr: guest virtual address of an instruction (arm32: without the
+ *         Thumb bit)
+ * @cb: the callback
+ * @userdata: passed to @cb
+ *
+ * An alternative to registering instruction callbacks from a translation
+ * callback, for a known set of addresses that may change at run time.
+ * QEMU decides at translation time whether an instruction is hooked, so
+ * unhooked code is not instrumented at all and no translation callback is
+ * needed; a hooked instruction costs one call.  Inserting a hook at an
+ * address that never had one invalidates only the translated blocks that
+ * contain it; it takes effect at once if called before the vCPUs run,
+ * otherwise once every vCPU has left the code it is executing (the calling
+ * vCPU is kicked).  Hooks fire in every address space: filter in @cb.
+ *
+ * Using hooks turns off position-independent translation (CF_PCREL), so
+ * a block is never reused at a different virtual address.  TCG only.
+ *
+ * Several hooks may share an address; they run in reverse insertion order.
+ * Remove a plugin's hooks before uninstalling it.
+ *
+ * Returns a handle, or NULL if hooks are not available (e.g. under KVM).
+ */
+QEMU_PLUGIN_API
+struct qemu_plugin_hook *qemu_plugin_hook_insert(qemu_plugin_id_t id,
+                                                 uint64_t vaddr,
+                                                 qemu_plugin_vcpu_hook_cb_t cb,
+                                                 void *userdata);
+
+/**
+ * enum qemu_plugin_hook_cmp - comparison for a hook condition
+ *
+ * Signed (LT, LE, GT, GE) or unsigned (LTU, LEU, GTU, GEU) comparisons.
+ */
+enum qemu_plugin_hook_cmp {
+    QEMU_PLUGIN_HOOK_EQ,
+    QEMU_PLUGIN_HOOK_NE,
+    QEMU_PLUGIN_HOOK_LT,
+    QEMU_PLUGIN_HOOK_LE,
+    QEMU_PLUGIN_HOOK_GT,
+    QEMU_PLUGIN_HOOK_GE,
+    QEMU_PLUGIN_HOOK_LTU,
+    QEMU_PLUGIN_HOOK_LEU,
+    QEMU_PLUGIN_HOOK_GTU,
+    QEMU_PLUGIN_HOOK_GEU,
+};
+
+/**
+ * struct qemu_plugin_hook_cond - a condition tested before a hook is called
+ *
+ * @kind: what is compared: @reg or @host
+ * @reg: a register (a handle may be NULL: it is not a pointer)
+ * @host: a plugin variable, read each time the instruction is reached;
+ *        it must stay valid until the hook is removed
+ * @size: compare the low 4 or 8 bytes (a 4-byte value is sign-extended
+ *        for a signed comparison)
+ * @mask: if nonzero, compare (value & @mask)
+ * @cond: the comparison
+ * @value: compared with
+ *
+ * The test is: (value & mask) @cond @value.  A range is two conditions;
+ * "all bits of m set" is @mask m, EQ, @value m.
+ */
+enum qemu_plugin_hook_operand {
+    QEMU_PLUGIN_HOOK_OPERAND_REG,
+    QEMU_PLUGIN_HOOK_OPERAND_HOST,
+};
+
+struct qemu_plugin_hook_cond {
+    enum qemu_plugin_hook_operand kind;
+    struct qemu_plugin_register *reg;
+    const void *host;
+    unsigned int size;
+    uint64_t mask;
+    enum qemu_plugin_hook_cmp cond;
+    uint64_t value;
+};
+
+/**
+ * qemu_plugin_hook_insert_cond() - a hook called only when conditions hold
+ *
+ * @id: the plugin
+ * @vaddr: as for qemu_plugin_hook_insert()
+ * @cb: the callback
+ * @userdata: passed to @cb
+ * @conds: conditions, all of which must hold
+ * @nconds: number of conditions (at least 1)
+ *
+ * Like qemu_plugin_hook_insert(), but the conditions are compiled into the
+ * translated code ahead of the call, so a hit that fails them costs a
+ * compare and a branch, not a call.  A condition on a register that is not
+ * held in one place in the CPU state (see qemu_plugin_register_ptr()) is
+ * tested in C just before @cb instead.  Inserting a conditional hook always
+ * invalidates the translated blocks containing @vaddr, and a removed one
+ * keeps a few bytes allocated until the translation cache is next flushed.
+ *
+ * To turn a hook on and off cheaply (e.g. a return probe that is only
+ * wanted while calls are outstanding), give it a condition on a plugin
+ * variable and change the variable.
+ *
+ * Returns a handle for qemu_plugin_hook_remove(), or NULL if hooks are not
+ * available.
+ */
+QEMU_PLUGIN_API
+struct qemu_plugin_hook *
+qemu_plugin_hook_insert_cond(qemu_plugin_id_t id, uint64_t vaddr,
+                             qemu_plugin_vcpu_hook_cb_t cb, void *userdata,
+                             const struct qemu_plugin_hook_cond *conds,
+                             size_t nconds);
+
+/**
+ * enum qemu_plugin_syscall_abi - how a system-mode syscall was made
+ *
+ * The ABI follows from the trap and the CPU state at the trap: x86 int 0x80
+ * against syscall, an AArch32 task under an AArch64 kernel, an ARM OABI
+ * swi.  MIPS reports the number as the task passed it; the o32, n64 and n32
+ * numbers start at 4000, 5000 and 6000.
+ */
+enum qemu_plugin_syscall_abi {
+    QEMU_PLUGIN_SYSCALL_ABI_X86_64,
+    QEMU_PLUGIN_SYSCALL_ABI_I386,
+    QEMU_PLUGIN_SYSCALL_ABI_AARCH64,
+    QEMU_PLUGIN_SYSCALL_ABI_ARM,
+    QEMU_PLUGIN_SYSCALL_ABI_ARM_OABI,
+    QEMU_PLUGIN_SYSCALL_ABI_MIPS,
+    QEMU_PLUGIN_SYSCALL_ABI_PPC64,
+    QEMU_PLUGIN_SYSCALL_ABI_PPC,
+    QEMU_PLUGIN_SYSCALL_ABI_RISCV64,
+    QEMU_PLUGIN_SYSCALL_ABI_RISCV32,
+    QEMU_PLUGIN_SYSCALL_ABI_LOONGARCH64,
+    QEMU_PLUGIN_SYSCALL_ABI_COUNT,
+};
+
+/**
+ * struct qemu_plugin_syscall - one system-mode syscall event
+ * @abi: see enum qemu_plugin_syscall_abi
+ * @num: the syscall number
+ * @args: the arguments, as the task passed them
+ * @pc: where the call returns to, just past the trap instruction
+ * @ret: on return, the result, which the callback may change; on entry,
+ *   the result to return when @skip is set
+ * @skip: entry: do not enter the kernel, return @ret to the task
+ * @want_return: entry: report this call's return (initially whether the
+ *   return is watched); the callback may clear it
+ * @restart: return: the kernel is restarting the call; the task will enter
+ *   it again, and @ret is meaningless
+ * @keep: return: still wait for this call's return (a vfork child's return,
+ *   which shares the parent's address space and stack)
+ * @cookie: the plugin's own value, set on entry and given back on return
+ *
+ * The callbacks may change @args on entry, and @ret on return.
+ */
+struct qemu_plugin_syscall {
+    enum qemu_plugin_syscall_abi abi;
+    int64_t num;
+    uint64_t args[6];
+    uint64_t pc;
+    int64_t ret;
+    bool skip;
+    bool want_return;
+    bool restart;
+    bool keep;
+    uint64_t cookie;
+};
+
+typedef void (*qemu_plugin_syscall_event_cb_t)(qemu_plugin_id_t id,
+                                               unsigned int vcpu_index,
+                                               struct qemu_plugin_syscall *sc,
+                                               void *userdata);
+
+/**
+ * qemu_plugin_register_syscall_event_cb() - system-mode syscall events
+ * @id: plugin ID
+ * @enter: called when a task traps into the kernel for a watched syscall
+ * @ret: called when the kernel returns to that task from the call
+ * @userdata: passed to the callbacks
+ *
+ * QEMU sees the trap instruction and the kernel's return to user mode, so
+ * this needs no knowledge of the kernel.  A call is matched to its return
+ * by the task (the arch's per-task kernel stack where the CPU has one, else
+ * the address space and user stack pointer) and the return address.  A
+ * return that goes elsewhere (to a signal handler) is not the call's
+ * return; the call returns when the handler's sigreturn comes back to it.
+ * Calls that never return (exit, a successful execve on some arches) are
+ * not reported; do not watch their returns.  Register access is allowed in
+ * the callbacks.  TCG only; one plugin at a time.
+ *
+ * Returns: true on success.
+ */
+QEMU_PLUGIN_API
+bool qemu_plugin_register_syscall_event_cb(qemu_plugin_id_t id,
+                                           qemu_plugin_syscall_event_cb_t enter,
+                                           qemu_plugin_syscall_event_cb_t ret,
+                                           void *userdata);
+
+#define QEMU_PLUGIN_SYSCALL_ENTER  1
+#define QEMU_PLUGIN_SYSCALL_RETURN 2
+
+/**
+ * qemu_plugin_syscall_watch() - choose the syscalls that call the plugin
+ * @id: plugin ID
+ * @abi: the ABI
+ * @num: the syscall number, or -1 for every number of @abi
+ * @flags: QEMU_PLUGIN_SYSCALL_ENTER and/or QEMU_PLUGIN_SYSCALL_RETURN; 0
+ *   stops watching
+ *
+ * Unwatched syscalls cost a table lookup at the trap.  Numbers from 8192
+ * up can only be watched with @num -1.
+ *
+ * Returns: true on success.
+ */
+QEMU_PLUGIN_API
+bool qemu_plugin_syscall_watch(qemu_plugin_id_t id,
+                               enum qemu_plugin_syscall_abi abi,
+                               int64_t num, unsigned flags);
+
+/**
+ * qemu_plugin_syscall_stats() - pending-call bookkeeping
+ * @pending: calls waiting for their return
+ * @full: calls not tracked because the table was full
+ * @stale: calls replaced by a new call from the same task and address, or
+ *   dropped as the oldest when the table filled (a successful execve's
+ *   call never returns to its task and address)
+ */
+QEMU_PLUGIN_API
+void qemu_plugin_syscall_stats(uint64_t *pending, uint64_t *full,
+                               uint64_t *stale);
+
+/**
+ * qemu_plugin_hook_remove() - remove a hook
+ *
+ * @hook: the handle from qemu_plugin_hook_insert(), or NULL
+ *
+ * Callable from any callback, including the hook's own.  The callback is
+ * not called again once this returns.
+ */
+QEMU_PLUGIN_API
+void qemu_plugin_hook_remove(struct qemu_plugin_hook *hook);
 
 /**
  * qemu_plugin_set_pc() - set the program counter for the current vCPU

@@ -79,7 +79,7 @@ else
 endif
 
 user_ss.add(files('user.c', 'api-user.c'))
-system_ss.add(files('system.c', 'api-system.c'))
+system_ss.add(files('system.c', 'api-system.c', 'syscall-system.c'))
 
 user_ss.add(files('api.c', 'core.c'))
 system_ss.add(files('api.c', 'core.c'))
