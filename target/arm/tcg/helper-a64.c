@@ -28,6 +28,7 @@
 #include "qemu/main-loop.h"
 #include "qemu/bitops.h"
 #include "internals.h"
+#include "system/syscall-trap.h"
 #include "qemu/crc32c.h"
 #include "exec/cpu-common.h"
 #include "accel/tcg/cpu-ldst.h"
@@ -761,6 +762,37 @@ void HELPER(exception_return)(CPUARMState *env, uint64_t new_pc)
     arm_call_el_change_hook(cpu);
     bql_unlock();
 
+    while (new_el == 0 && syscall_trap_waiting()) {
+        uint64_t ret = return_to_aa64 ? env->xregs[0] : env->regs[0];
+        SyscallTrapRewind rw;
+        int r = syscall_trap_return(env_cpu(env),
+                                    return_to_aa64 ? env->pc : env->regs[15],
+                                    arm_sc_key(env), arm_sc_usp(env),
+                                    arm_sc_percpu(env), arm_sc_kmmu(), &ret,
+                                    &rw);
+
+        if ((r & SYSCALL_TRAP_REWIND) && return_to_aa64 &&
+            rw.abi == SYSCALL_ABI_AARCH64) {
+            /* an injected call is back: the task's own call, again */
+            env->xregs[8] = rw.num;
+            memcpy(env->xregs, rw.args, sizeof(rw.args));
+            env->pc -= rw.len;
+            break;
+        }
+
+        if (r & SYSCALL_TRAP_RET) {
+            if (return_to_aa64) {
+                env->xregs[0] = ret;
+            } else {
+                env->regs[0] = ret;
+            }
+        }
+        if (!(r & SYSCALL_TRAP_FAULT)) {
+            break;
+        }
+        /* the state is exact: the task is back at EL0 */
+        syscall_trap_fault(env_cpu(env), 0);
+    }
     return;
 
 illegal_return:

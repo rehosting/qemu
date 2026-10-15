@@ -1527,6 +1527,19 @@ void *tlb_vaddr_to_host(CPUArchState *env, vaddr addr,
     return flags ? NULL : host;
 }
 
+void *tlb_vaddr_to_host_lookup(CPUState *cpu, vaddr addr,
+                               MMUAccessType access_type, int mmu_idx)
+{
+    CPUTLBEntry *entry = tlb_entry(cpu, mmu_idx, addr);
+    uint64_t cmp = tlb_read_idx(entry, access_type);
+
+    /* a hit on plain RAM only: no fill, so no page walk side effects */
+    if (!tlb_hit(cmp, addr) || (cmp & (TLB_FORCE_SLOW | TLB_NOTDIRTY))) {
+        return NULL;
+    }
+    return (void *)((uintptr_t)addr + entry->addend);
+}
+
 /*
  * Return a ram_addr_t for the virtual address for execution.
  *

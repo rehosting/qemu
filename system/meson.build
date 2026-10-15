@@ -20,6 +20,7 @@ system_ss.add(files(
   'physmem.c',
   'qdev-monitor.c',
   'qtest.c',
+  'syscall-trap.c',
   'rtc.c',
   'runstate-action.c',
   'runstate-hmp-cmds.c',

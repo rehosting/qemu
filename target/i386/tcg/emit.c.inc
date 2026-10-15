@@ -4130,6 +4130,7 @@ static void gen_SYSCALL(DisasContext *s, X86DecodedInsn *decode)
 
 static void gen_SYSENTER(DisasContext *s, X86DecodedInsn *decode)
 {
+    gen_update_eip_cur(s);      /* plugin syscall events read it */
     gen_helper_sysenter(tcg_env);
     s->base.is_jmp = DISAS_EOB_ONLY;
 }

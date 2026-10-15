@@ -339,6 +339,13 @@ static inline unsigned int aarch64_banked_spsr_index(unsigned int el)
 }
 
 /* Map CPU modes onto saved register banks.  */
+#ifndef CONFIG_USER_ONLY
+uint64_t arm_sc_key(CPUARMState *env);
+uint64_t arm_sc_percpu(CPUARMState *env);
+uint64_t arm_sc_usp(CPUARMState *env);
+uint32_t arm_sc_kmmu(void);
+#endif
+
 static inline int bank_number(int mode)
 {
     switch (mode) {

@@ -119,4 +119,18 @@ int probe_access_full_mmu(CPUArchState *env, vaddr addr, int size,
 void *tlb_vaddr_to_host(CPUArchState *env, vaddr addr,
                         MMUAccessType access_type, int mmu_idx);
 
+/**
+ * tlb_vaddr_to_host_lookup:
+ * @cpu: the vCPU whose TLB to search (its own thread only)
+ * @addr: guest virtual address to look up
+ * @access_type: as for tlb_vaddr_to_host()
+ * @mmu_idx: MMU index to use for lookup
+ *
+ * Like tlb_vaddr_to_host(), but only on a hit in the main TLB for plain
+ * RAM: never fills the TLB, so it never walks the guest page tables (no
+ * accessed/dirty bits set, no faults).  Returns NULL otherwise.
+ */
+void *tlb_vaddr_to_host_lookup(CPUState *cpu, vaddr addr,
+                               MMUAccessType access_type, int mmu_idx);
+
 #endif

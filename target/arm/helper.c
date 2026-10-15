@@ -35,6 +35,7 @@
 #include "cpregs.h"
 #include "target/arm/gtimer.h"
 #include "qemu/plugin.h"
+#include "system/syscall-trap.h"
 
 static void switch_mode(CPUARMState *env, int mode);
 
@@ -9487,6 +9488,119 @@ static void tcg_handle_semihosting(CPUState *cs)
  *       and KVM to re-inject guest debug exceptions, and to
  *       inject a Synchronous-External-Abort.
  */
+/*
+ * The task key for syscall events: the kernel's stack pointer for
+ * the task, which the CPU banks while the task runs in user mode, and the
+ * user stack pointer (arm_sc_usp), which tells a signal handler's calls
+ * from the call it interrupted.
+ */
+uint64_t arm_sc_usp(CPUARMState *env)
+{
+    return is_a64(env) ? env->xregs[31] : env->regs[13];
+}
+
+uint32_t arm_sc_kmmu(void)
+{
+    return (1u << arm_to_core_mmu_idx(ARMMMUIdx_E10_1)) |
+           (1u << arm_to_core_mmu_idx(ARMMMUIdx_E10_1_PAN));
+}
+
+uint64_t arm_sc_key(CPUARMState *env)
+{
+    if (arm_el_is_aa64(env, 1)) {
+        return env->sp_el[1];
+    }
+    return env->banked_r13[bank_number(ARM_CPU_MODE_SVC)];
+}
+
+/* where the kernel finds the task: its per-CPU base, or its stack */
+uint64_t arm_sc_percpu(CPUARMState *env)
+{
+    return arm_el_is_aa64(env, 1) ? env->cp15.tpidr_el[1] : arm_sc_key(env);
+}
+
+/* svc from EL0: report the syscall; true if the consumer skipped it */
+static bool arm_sc_enter(CPUARMState *env)
+{
+    uint64_t args[6], ret, pc;
+    int abi, r;
+    int64_t num;
+    unsigned len;
+
+    if (is_a64(env)) {
+        abi = SYSCALL_ABI_AARCH64;
+        num = env->xregs[8];
+        memcpy(args, env->xregs, sizeof(args));
+        pc = env->pc;
+        len = 4;
+    } else {
+        uint32_t imm = env->exception.syndrome & 0xffff;   /* ISS imm16 */
+
+        abi = SYSCALL_ABI_ARM;
+        num = (uint32_t)env->regs[7];
+        if (!arm_el_is_aa64(env, 1) && imm && !env->thumb) {
+            /* OABI: swi 0x900000 + n; the syndrome holds the low 16 bits */
+            abi = SYSCALL_ABI_ARM_OABI;
+            num = imm;
+        }
+        for (int i = 0; i < 6; i++) {
+            args[i] = (uint32_t)env->regs[i];
+        }
+        pc = env->regs[15];
+        len = env->thumb ? 2 : 4;
+        if (arm_el_is_aa64(env, 1)) {
+            /*
+             * The 64-bit view of the user registers, as the exception entry
+             * would make it (a consumer reads them through the gdbstub,
+             * which shows xregs): dead state while EL0 runs AArch32.
+             */
+            aarch64_sync_32_to_64(env);
+        }
+    }
+    while ((r = syscall_trap_enter(env_cpu(env), abi, num, args, pc, len,
+                                   arm_sc_key(env), arm_sc_usp(env),
+                                   arm_sc_percpu(env), arm_sc_kmmu(),
+                                   &ret)) & SYSCALL_TRAP_FAULT) {
+        /*
+         * Take a data abort at the svc instead: back to it, still at EL0,
+         * so the abort returns there and the svc runs again.
+         */
+        if (is_a64(env)) {
+            env->pc -= len;
+        } else {
+            env->regs[15] -= len;
+        }
+        syscall_trap_fault(env_cpu(env), 0);
+        if (is_a64(env)) {
+            env->pc += len;
+        } else {
+            env->regs[15] += len;
+        }
+    }
+    if (r & (SYSCALL_TRAP_ARGS | SYSCALL_TRAP_INJECT)) {
+        for (int i = 0; i < 6; i++) {
+            if (is_a64(env)) {
+                env->xregs[i] = args[i];
+            } else {
+                env->regs[i] = args[i];
+            }
+        }
+    }
+    if ((r & SYSCALL_TRAP_INJECT) && is_a64(env)) {
+        env->xregs[8] = ret;            /* the call the kernel runs */
+    }
+    if (r & SYSCALL_TRAP_SKIP) {
+        /* the PC is already past the svc */
+        if (is_a64(env)) {
+            env->xregs[0] = ret;
+        } else {
+            env->regs[0] = ret;
+        }
+        return true;
+    }
+    return false;
+}
+
 void arm_cpu_do_interrupt(CPUState *cs)
 {
     ARMCPU *cpu = ARM_CPU(cs);
@@ -9525,6 +9639,11 @@ void arm_cpu_do_interrupt(CPUState *cs)
         return;
     }
 #endif
+
+    if (cs->exception_index == EXCP_SWI && syscall_trap_enabled() &&
+        arm_current_el(env) == 0 && arm_sc_enter(env)) {
+        return;
+    }
 
     /*
      * Hooks may change global state so BQL should be held, also the

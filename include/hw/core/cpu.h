@@ -563,6 +563,12 @@ struct CPUState {
     int32_t exception_index;
     /* host return address into the block while a TCG hook runs, or 0 */
     uintptr_t tcg_hook_ra;
+    /*
+     * While a syscall-event callback runs (the vCPU in user mode): the
+     * kernel's MMU indexes, which syscall_trap_read() tries after the
+     * current one.  Never a physical or stage-2 index.
+     */
+    uint32_t syscall_kmmu;
 
     bool vcpu_dirty;
     AccelCPUState *accel;

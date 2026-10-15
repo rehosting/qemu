@@ -30,6 +30,7 @@
 #include "access.h"
 #include "tcg-cpu.h"
 #include "qemu/plugin.h"
+#include "system/syscall-trap.h"
 
 #ifdef TARGET_X86_64
 #define SET_ESP(val, sp_mask)                                   \
@@ -1136,6 +1137,9 @@ void helper_sysret(CPUX86State *env, int dflag)
                                DESC_S_MASK | (3 << DESC_DPL_SHIFT) |
                                DESC_W_MASK | DESC_A_MASK);
     }
+#ifndef CONFIG_USER_ONLY
+    x86_sc_return(env);
+#endif
 }
 
 /* real mode interrupt */
@@ -1184,6 +1188,105 @@ static void do_interrupt_real(CPUX86State *env, int intno, int is_int,
     env->eflags &= ~(IF_MASK | TF_MASK | AC_MASK | RF_MASK);
 }
 
+#ifndef CONFIG_USER_ONLY
+void x86_sc_return(CPUX86State *env)
+{
+    SyscallTrapRewind rw;
+    uint64_t ret;
+
+    if (!syscall_trap_waiting() || (env->hflags & HF_CPL_MASK) != 3) {
+        return;
+    }
+    for (;;) {
+        int r;
+
+        ret = env->regs[R_EAX];
+        r = syscall_trap_return(env_cpu(env), env->segs[R_CS].base + env->eip,
+                                x86_sc_key(env), env->regs[R_ESP],
+                                x86_sc_percpu(env), X86_SC_KMMU, &ret, &rw);
+        if (r & SYSCALL_TRAP_RET) {
+            env->regs[R_EAX] = ret;
+        }
+        if ((r & SYSCALL_TRAP_REWIND) && rw.abi == SYSCALL_ABI_X86_64) {
+            /* an injected call is back: the task's own call, again */
+            static const int a[6] = { R_EDI, R_ESI, R_EDX, 10, 8, 9 };
+
+            env->regs[R_EAX] = rw.num;
+            for (int i = 0; i < 6; i++) {
+                env->regs[a[i]] = rw.args[i];
+            }
+            env->eip -= rw.len;
+            return;
+        }
+        if (!(r & SYSCALL_TRAP_FAULT)) {
+            return;
+        }
+        /* the state is exact: the task is back in user mode */
+        syscall_trap_fault(env_cpu(env), 0);
+    }
+}
+
+/*
+ * An i386 syscall from user mode: int 0x80, or the vDSO's syscall/sysenter
+ * (arguments 2 and 6 moved: see __kernel_vsyscall).  @next is the address
+ * past the trap; the vDSO's fast paths return past the int 0x80 that
+ * follows it.  @a2 and @usp: where argument 2 and the user stack pointer
+ * are.  True if the consumer skipped the call.
+ */
+bool x86_sc_i386(CPUX86State *env, target_ulong next, unsigned len,
+                 int a2, int usp, bool fast)
+{
+    const int a[6] = { R_EBX, a2, R_EDX, R_ESI, R_EDI, R_EBP };
+    CPUState *cs = env_cpu(env);
+    uint64_t args[6], ret, pc = env->segs[R_CS].base + next;
+    uint32_t sp = env->regs[usp], arg6 = 0;
+    int r;
+
+    for (int i = 0; i < 6; i++) {
+        args[i] = (uint32_t)env->regs[a[i]];
+    }
+    if (fast) {
+        uint8_t insn[2];
+
+        /* argument 6 is on the user stack, where the vDSO pushed ebp */
+        if (cpu_memory_rw_debug(cs, sp, &arg6, 4, false) == 0) {
+            args[5] = le32_to_cpu(arg6);
+        }
+        if (cpu_memory_rw_debug(cs, pc, insn, 2, false) == 0 &&
+            insn[0] == 0xcd && insn[1] == 0x80) {
+            pc += 2;
+        }
+    }
+    /*
+     * A fault: the state is exact (an exception being delivered, or the
+     * sysenter helper) and EIP is at the trap instruction.
+     */
+    while ((r = syscall_trap_enter(cs, SYSCALL_ABI_I386,
+                                   (uint32_t)env->regs[R_EAX], args, pc, len,
+                                   x86_sc_key(env), sp, x86_sc_percpu(env),
+                                   X86_SC_KMMU, &ret)) & SYSCALL_TRAP_FAULT) {
+        syscall_trap_fault(cs, 0);
+    }
+    if (r & SYSCALL_TRAP_ARGS) {
+        for (int i = 0; i < 5; i++) {
+            env->regs[a[i]] = (uint32_t)args[i];
+        }
+        if (!fast) {
+            env->regs[R_EBP] = (uint32_t)args[5];
+        }
+    }
+    if (r & SYSCALL_TRAP_SKIP) {
+        env->regs[R_EAX] = (uint32_t)ret;
+        env->eip = pc - env->segs[R_CS].base;
+        if (fast) {
+            env->regs[R_ESP] = sp;
+        }
+        return true;
+    }
+    return false;
+}
+#endif
+
 /*
  * Begin execution of an interruption. is_int is TRUE if coming from
  * the int instruction. next_eip is the env->eip value AFTER the interrupt
@@ -1229,6 +1332,13 @@ void do_interrupt_all(X86CPU *cpu, int intno, int is_int,
             count++;
         }
     }
+#ifndef CONFIG_USER_ONLY
+    if (is_int && intno == 0x80 && !is_hw && syscall_trap_enabled() &&
+        (env->cr[0] & CR0_PE_MASK) && (env->hflags & HF_CPL_MASK) == 3 &&
+        x86_sc_i386(env, next_eip, 2, R_ECX, R_ESP, false)) {
+        return;
+    }
+#endif
     if (env->cr[0] & CR0_PE_MASK) {
 #if !defined(CONFIG_USER_ONLY)
         if (env->hflags & HF_GUEST_MASK) {
@@ -2276,6 +2386,9 @@ void helper_iret_protected(CPUX86State *env, int shift, int next_eip)
         helper_ret_protected(env, shift, 1, 0, GETPC());
     }
     env->hflags2 &= ~HF2_NMI_MASK;
+#ifndef CONFIG_USER_ONLY
+    x86_sc_return(env);
+#endif
 }
 
 void helper_lret_protected(CPUX86State *env, int shift, int addend)
@@ -2288,6 +2401,13 @@ void helper_sysenter(CPUX86State *env)
     if (env->sysenter_cs == 0) {
         raise_exception_err_ra(env, EXCP0D_GPF, 0, GETPC());
     }
+#ifndef CONFIG_USER_ONLY
+    /* the vDSO puts the user stack pointer in ebp: sysenter loses esp */
+    if (syscall_trap_enabled() && (env->hflags & HF_CPL_MASK) == 3 &&
+        x86_sc_i386(env, env->eip + 2, 2, R_ECX, R_EBP, true)) {
+        return;
+    }
+#endif
     env->eflags &= ~(VM_MASK | IF_MASK | RF_MASK);
 
 #ifdef TARGET_X86_64
@@ -2353,6 +2473,9 @@ void helper_sysexit(CPUX86State *env, int dflag)
     }
     env->regs[R_ESP] = env->regs[R_ECX];
     env->eip = env->regs[R_EDX];
+#ifndef CONFIG_USER_ONLY
+    x86_sc_return(env);
+#endif
 }
 
 target_ulong helper_lsl(CPUX86State *env, target_ulong selector1)

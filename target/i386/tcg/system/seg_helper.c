@@ -26,6 +26,7 @@
 #include "accel/tcg/cpu-ldst.h"
 #include "tcg/helper-tcg.h"
 #include "../seg_helper.h"
+#include "system/syscall-trap.h"
 
 void helper_syscall(CPUX86State *env, int next_eip_addend)
 {
@@ -34,6 +35,55 @@ void helper_syscall(CPUX86State *env, int next_eip_addend)
     if (!(env->efer & MSR_EFER_SCE)) {
         raise_exception_err_ra(env, EXCP06_ILLOP, 0, GETPC());
     }
+#ifdef TARGET_X86_64
+    if (syscall_trap_enabled() && (env->hflags & HF_CPL_MASK) == 3 &&
+        (env->hflags & HF_CS64_MASK)) {
+        static const int a[6] = { R_EDI, R_ESI, R_EDX, 10, 8, 9 };
+        uint64_t args[6], ret;
+        int r;
+
+        for (;;) {
+            for (int i = 0; i < 6; i++) {
+                args[i] = env->regs[a[i]];
+            }
+            r = syscall_trap_enter(env_cpu(env), SYSCALL_ABI_X86_64,
+                                   env->regs[R_EAX], args,
+                                   env->eip + next_eip_addend, next_eip_addend,
+                                   x86_sc_key(env), env->regs[R_ESP],
+                                   x86_sc_percpu(env), X86_SC_KMMU, &ret);
+            if (!(r & SYSCALL_TRAP_FAULT)) {
+                break;
+            }
+            /* restores the state at the syscall instruction */
+            syscall_trap_fault(env_cpu(env), GETPC());
+        }
+        if (r & (SYSCALL_TRAP_ARGS | SYSCALL_TRAP_INJECT)) {
+            for (int i = 0; i < 6; i++) {
+                env->regs[a[i]] = args[i];
+            }
+        }
+        if (r & SYSCALL_TRAP_INJECT) {
+            env->regs[R_EAX] = ret;     /* the call the kernel runs */
+        }
+        if (r & SYSCALL_TRAP_SKIP) {
+            /* the translator expects the flags in CC_OP_EFLAGS form */
+            env->regs[R_EAX] = ret;
+            env->eip += next_eip_addend;
+            cpu_load_eflags(env, cpu_compute_eflags(env), 0);
+            return;
+        }
+    }
+#endif
+#ifdef TARGET_X86_64
+    /* a 32-bit task through the vDSO: argument 2 is in ebp */
+    if (syscall_trap_enabled() && (env->hflags & HF_CPL_MASK) == 3 &&
+        (env->hflags & HF_LMA_MASK) && !(env->hflags & HF_CS64_MASK) &&
+        x86_sc_i386(env, env->eip + next_eip_addend, next_eip_addend,
+                    R_EBP, R_ESP, true)) {
+        cpu_load_eflags(env, cpu_compute_eflags(env), 0);
+        return;
+    }
+#endif
     selector = (env->star >> 32) & 0xffff;
 #ifdef TARGET_X86_64
     if (env->hflags & HF_LMA_MASK) {

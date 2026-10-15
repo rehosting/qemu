@@ -61,4 +61,25 @@ int cpu_mmu_index_kernel(CPUX86State *env);
 #define cpu_stl_kernel(e, p, v)  cpu_stl_kernel_ra(e, p, v, 0)
 #define cpu_stq_kernel(e, p, v)  cpu_stq_kernel_ra(e, p, v, 0)
 
+#ifndef CONFIG_USER_ONLY
+/* syscall events: the task key, the kernel's per-CPU base, a return */
+static inline uint64_t x86_sc_key(CPUX86State *env)
+{
+    return env->cr[3] & ~0xfffull;      /* the address space, without PCID */
+}
+static inline uint64_t x86_sc_percpu(CPUX86State *env)
+{
+#ifdef TARGET_X86_64
+    return env->kernelgsbase;           /* swapgs has not run yet */
+#else
+    return 0;
+#endif
+}
+#define X86_SC_KMMU ((1u << MMU_KSMAP64_IDX) | (1u << MMU_KNOSMAP64_IDX) | \
+                     (1u << MMU_KSMAP32_IDX) | (1u << MMU_KNOSMAP32_IDX))
+void x86_sc_return(CPUX86State *env);
+bool x86_sc_i386(CPUX86State *env, target_ulong next, unsigned len,
+                 int a2, int usp, bool fast);
+#endif
+
 #endif /* SEG_HELPER_H */
