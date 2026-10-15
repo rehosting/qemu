@@ -981,6 +981,14 @@ ObjectClass *object_class_get_parent(ObjectClass *klass);
 const char *object_class_get_name(ObjectClass *klass);
 
 /**
+ * object_class_get_instance_size:
+ * @klass: The class to obtain the instance size for.
+ *
+ * Returns: The size in bytes of an instance of @klass.
+ */
+size_t object_class_get_instance_size(ObjectClass *klass);
+
+/**
  * object_class_is_abstract:
  * @klass: The class to obtain the abstractness for.
  *

@@ -44,6 +44,7 @@
 #include "hw/core/cpu.h"
 
 #include "tcg-accel-ops.h"
+#include "hooks-internal.h"
 #include "tcg-accel-ops-mttcg.h"
 #include "tcg-accel-ops-rr.h"
 #include "tcg-accel-ops-icount.h"
@@ -67,6 +68,7 @@ void tcg_cpu_init_cflags(CPUState *cpu, bool parallel)
     cflags |= parallel ? CF_PARALLEL : 0;
     cflags |= icount_enabled() ? CF_USE_ICOUNT : 0;
     tcg_cflags_set(cpu, cflags);
+    tcg_hooks_vcpu_cflags(cpu);
 }
 
 void tcg_cpu_destroy(CPUState *cpu)

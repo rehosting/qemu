@@ -37,6 +37,7 @@
 #include "internal-common.h"
 #include "tcg/perf.h"
 #include "tcg/insn-start-words.h"
+#include "hooks-internal.h"
 
 TBContext tb_ctx;
 
@@ -536,6 +537,9 @@ TranslationBlock *tb_gen_code(CPUState *cpu, TCGTBCPUState s)
         qatomic_set(&tcg_ctx->code_gen_ptr, (void *)orig_aligned);
         tcg_tb_remove(tb);
         return existing_tb;
+    }
+    if (unlikely(qatomic_read(&tcg_hooks_enabled))) {
+        tcg_hooks_tb_linked(tb);
     }
     return tb;
 }

@@ -561,6 +561,8 @@ struct CPUState {
     uint32_t tcg_cflags;
     uint32_t halted;
     int32_t exception_index;
+    /* host return address into the block while a TCG hook runs, or 0 */
+    uintptr_t tcg_hook_ra;
 
     bool vcpu_dirty;
     AccelCPUState *accel;

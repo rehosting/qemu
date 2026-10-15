@@ -20,6 +20,7 @@
 #include "internal-common.h"
 #include "disas/disas.h"
 #include "tb-internal.h"
+#include "hooks-internal.h"
 
 static void set_can_do_io(DisasContextBase *db, bool val)
 {
@@ -164,6 +165,10 @@ void translator_loop(CPUState *cpu, TranslationBlock *tb, int *max_insns,
             first_insn_start = db->insn_start;
         }
         tcg_debug_assert(db->is_jmp == DISAS_NEXT);  /* no early exit */
+
+        if (unlikely(qatomic_read(&tcg_hooks_enabled))) {
+            tcg_hooks_gen(db);
+        }
 
         if (plugin_enabled) {
             plugin_gen_insn_start(cpu, db);

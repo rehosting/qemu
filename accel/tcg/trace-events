@@ -28,3 +28,7 @@ store_atom16_fallback(uint32_t memop, uintptr_t ra) "mop:0x%"PRIx32", ra:0x%"PRI
 
 # tb-maint.c
 tb_flush(void) ""
+
+# hooks.c
+tcg_hooks_commit(int flush, unsigned pcs, unsigned tbs, unsigned invalidated, int64_t ns) "flush=%d new_sites=%u tbs_scanned=%u tbs_invalidated=%u ns=%" PRId64
+tcg_hooks_regloc_reject(int regno, int write, long first, long last) "register %d: write %d changed bytes %ld..%ld of the CPU state"

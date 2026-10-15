@@ -993,6 +993,11 @@ const char *object_class_get_name(ObjectClass *klass)
     return klass->type->name;
 }
 
+size_t object_class_get_instance_size(ObjectClass *klass)
+{
+    return klass->type->instance_size;
+}
+
 ObjectClass *object_class_by_name(const char *typename)
 {
     TypeImpl *type = type_get_by_name_noload(typename);

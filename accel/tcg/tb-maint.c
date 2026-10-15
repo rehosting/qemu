@@ -41,6 +41,7 @@
 #include "system/runstate.h"
 #endif
 #include "trace.h"
+#include "hooks-internal.h"
 
 /* List iterators for lists of tagged pointers in TranslationBlock. */
 #define TB_FOR_EACH_TAGGED(head, tb, n, field)                          \
@@ -783,6 +784,7 @@ void tb_flush__exclusive_or_serial(void)
 
     qht_reset_size(&tb_ctx.htable, CODE_GEN_HTABLE_SIZE);
     tb_remove_all();
+    tcg_hooks_tb_flush();
 
     tcg_region_reset_all();
     /* XXX: flush processor icache at this point if cache flush is expensive */
