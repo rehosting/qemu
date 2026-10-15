@@ -20,6 +20,7 @@
 #include "qemu/bswap.h"
 #include "qemu/cutils.h"
 #include "qemu/target-info.h"
+#include "qemu/target-info-impl.h"
 #include "hw/core/cpu.h"
 #include "exec/target_page.h"
 #include "exec/gdbstub.h"
@@ -1301,6 +1302,31 @@ static void psc_set_reg(CPUState *cpu, int n, uint64_t v)
 
 /* gdb register numbers: x86_64 rax 0, rdx 3, rsi 4, rdi 5, rsp 7; AArch64 xN */
 static bool psc_x86;
+static int psc_arch_kind = -1;
+
+/*
+ * The guest's architecture, for the kernel-function hooks' registers: 1
+ * x86_64, 2 AArch64, 0 another, -1 not known yet.  QEMU knows its target
+ * only once it is initialized, and the setters below may come first: they
+ * accept then, and the hooks check when they run.
+ */
+static int psc_arch(void)
+{
+    int k = qatomic_read(&psc_arch_kind);
+
+    if (k < 0) {
+        const TargetInfo *ti = target_info();
+
+        if (!ti) {
+            return -1;
+        }
+        k = !strcmp(ti->target_name, "x86_64") ? 1 :
+            !strcmp(ti->target_name, "aarch64") ? 2 : 0;
+        psc_x86 = k == 1;
+        qatomic_set(&psc_arch_kind, k);
+    }
+    return k;
+}
 
 static void psc_guard_cb(CPUState *cpu, vaddr pc, void *opaque)
 {
@@ -1308,6 +1334,9 @@ static void psc_guard_cb(CPUState *cpu, vaddr pc, void *opaque)
     uint64_t addr, ra, sp;
     uint8_t b[8];
 
+    if (psc_arch() <= 0) {
+        return;
+    }
     if (info) {
         /* force_sig_info(sig, info, task): si_addr at 16 */
         uint64_t p = psc_reg(cpu, psc_x86 ? 4 : 1);
@@ -1339,7 +1368,12 @@ static void psc_guard_cb(CPUState *cpu, vaddr pc, void *opaque)
 /* the reaper: release_task(p), the task's calls go with it */
 static void psc_reap_cb(CPUState *cpu, vaddr pc, void *opaque)
 {
-    unsigned n = syscall_trap_forget_task(psc_reg(cpu, psc_x86 ? 5 : 0));
+    unsigned n;
+
+    if (psc_arch() <= 0) {
+        return;
+    }
+    n = syscall_trap_forget_task(psc_reg(cpu, psc_x86 ? 5 : 0));
 
     if (n) {
         qatomic_add(&psc_reaped, n);
@@ -1355,7 +1389,7 @@ static void psc_exec_cb(CPUState *cpu, vaddr pc, void *opaque)
 {
     unsigned n;
 
-    if (!(psc_reg(cpu, psc_x86 ? 3 : 2) & 0xff)) {
+    if (psc_arch() <= 0 || !(psc_reg(cpu, psc_x86 ? 3 : 2) & 0xff)) {
         return;
     }
     n = syscall_trap_forget_task(psc_reg(cpu, psc_x86 ? 5 : 0));
@@ -1442,10 +1476,8 @@ penguin_syscall_set_guard(uint64_t force_sig_fault, uint64_t force_sig_info)
 #ifdef CONFIG_TCG
     static bool done;
 
-    psc_x86 = !strcmp(target_name(), "x86_64");
     /* may come before the accelerator is chosen: under KVM, no events */
-    if (!(psc_x86 || target_aarch64()) ||
-        !(force_sig_fault || force_sig_info)) {
+    if (psc_arch() == 0 || !(force_sig_fault || force_sig_info)) {
         return false;
     }
     QEMU_LOCK_GUARD(&psc_lock);
@@ -1471,8 +1503,7 @@ penguin_syscall_set_reaper(uint64_t release_task)
 #ifdef CONFIG_TCG
     static bool done;
 
-    psc_x86 = !strcmp(target_name(), "x86_64");
-    if (!(psc_x86 || target_aarch64()) || !release_task) {
+    if (psc_arch() == 0 || !release_task) {
         return false;
     }
     QEMU_LOCK_GUARD(&psc_lock);
@@ -1492,8 +1523,7 @@ penguin_syscall_set_exec(uint64_t set_task_comm)
 #ifdef CONFIG_TCG
     static bool done;
 
-    psc_x86 = !strcmp(target_name(), "x86_64");
-    if (!(psc_x86 || target_aarch64()) || !set_task_comm) {
+    if (psc_arch() == 0 || !set_task_comm) {
         return false;
     }
     QEMU_LOCK_GUARD(&psc_lock);
