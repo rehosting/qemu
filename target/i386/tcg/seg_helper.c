@@ -1261,6 +1261,7 @@ bool x86_sc_i386(CPUX86State *env, target_ulong next, unsigned len,
      * A fault: the state is exact (an exception being delivered, or the
      * sysenter helper) and EIP is at the trap instruction.
      */
+    cs->syscall_inject_abis = 1u << SYSCALL_ABI_X86_64;   /* not an i386 task's */
     while ((r = syscall_trap_enter(cs, SYSCALL_ABI_I386,
                                    (uint32_t)env->regs[R_EAX], args, pc, len,
                                    x86_sc_key(env), sp, x86_sc_percpu(env),

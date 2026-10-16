@@ -569,6 +569,11 @@ struct CPUState {
      * current one.  Never a physical or stage-2 index.
      */
     uint32_t syscall_kmmu;
+    /*
+     * While a syscall-event callback runs: the ABIs (1 << SYSCALL_ABI_*)
+     * whose registers the target can put back after an injected call.
+     */
+    uint32_t syscall_inject_abis;
 
     bool vcpu_dirty;
     AccelCPUState *accel;

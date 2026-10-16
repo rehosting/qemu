@@ -9557,6 +9557,12 @@ static bool arm_sc_enter(CPUARMState *env)
             aarch64_sync_32_to_64(env);
         }
     }
+    /*
+     * An injected call's registers go back on the way out to EL0: AArch64's,
+     * and an AArch32 task's when the kernel is AArch64 (helper-a64.c).
+     */
+    env_cpu(env)->syscall_inject_abis = (1u << SYSCALL_ABI_AARCH64) |
+        (arm_el_is_aa64(env, 1) ? 1u << SYSCALL_ABI_ARM : 0);
     while ((r = syscall_trap_enter(env_cpu(env), abi, num, args, pc, len,
                                    arm_sc_key(env), arm_sc_usp(env),
                                    arm_sc_percpu(env), arm_sc_kmmu(),
@@ -9586,8 +9592,13 @@ static bool arm_sc_enter(CPUARMState *env)
             }
         }
     }
-    if ((r & SYSCALL_TRAP_INJECT) && is_a64(env)) {
-        env->xregs[8] = ret;            /* the call the kernel runs */
+    if (r & SYSCALL_TRAP_INJECT) {
+        /* the call the kernel runs: x8, or an EABI task's r7 */
+        if (is_a64(env)) {
+            env->xregs[8] = ret;
+        } else {
+            env->regs[7] = ret;
+        }
     }
     if (r & SYSCALL_TRAP_SKIP) {
         /* the PC is already past the svc */

@@ -42,6 +42,7 @@ void helper_syscall(CPUX86State *env, int next_eip_addend)
         uint64_t args[6], ret;
         int r;
 
+        env_cpu(env)->syscall_inject_abis = 1u << SYSCALL_ABI_X86_64;
         for (;;) {
             for (int i = 0; i < 6; i++) {
                 args[i] = env->regs[a[i]];

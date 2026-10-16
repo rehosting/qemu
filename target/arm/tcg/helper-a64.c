@@ -779,6 +779,16 @@ void HELPER(exception_return)(CPUARMState *env, uint64_t new_pc)
             env->pc -= rw.len;
             break;
         }
+        if ((r & SYSCALL_TRAP_REWIND) && !return_to_aa64 &&
+            rw.abi == SYSCALL_ABI_ARM) {
+            /* the same for an AArch32 task: r7, r0-r5, back on the svc */
+            env->regs[7] = rw.num;
+            for (int i = 0; i < 6; i++) {
+                env->regs[i] = (uint32_t)rw.args[i];
+            }
+            env->regs[15] -= rw.len;
+            break;
+        }
 
         if (r & SYSCALL_TRAP_RET) {
             if (return_to_aa64) {
