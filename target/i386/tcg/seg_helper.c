@@ -1207,6 +1207,14 @@ void x86_sc_return(CPUX86State *env)
         if (r & SYSCALL_TRAP_RET) {
             env->regs[R_EAX] = ret;
         }
+        if ((r & SYSCALL_TRAP_RESTORE) && rw.abi == SYSCALL_ABI_X86_64) {
+            /* back from a call injected at the return: this call's arguments */
+            static const int a[6] = { R_EDI, R_ESI, R_EDX, 10, 8, 9 };
+
+            for (int i = 0; i < 6; i++) {
+                env->regs[a[i]] = rw.args[i];
+            }
+        }
         if ((r & SYSCALL_TRAP_REWIND) && rw.abi == SYSCALL_ABI_X86_64) {
             /* an injected call is back: the task's own call, again */
             static const int a[6] = { R_EDI, R_ESI, R_EDX, 10, 8, 9 };

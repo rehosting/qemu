@@ -790,6 +790,20 @@ void HELPER(exception_return)(CPUARMState *env, uint64_t new_pc)
             break;
         }
 
+        if (r & SYSCALL_TRAP_RESTORE) {
+            /* back from a call injected at the return: this call's registers */
+            if (return_to_aa64 && rw.abi == SYSCALL_ABI_AARCH64) {
+                env->xregs[8] = rw.num;
+                for (int i = 1; i < 6; i++) {
+                    env->xregs[i] = rw.args[i];
+                }
+            } else if (!return_to_aa64 && rw.abi == SYSCALL_ABI_ARM) {
+                env->regs[7] = rw.num;
+                for (int i = 1; i < 6; i++) {
+                    env->regs[i] = (uint32_t)rw.args[i];
+                }
+            }
+        }
         if (r & SYSCALL_TRAP_RET) {
             if (return_to_aa64) {
                 env->xregs[0] = ret;
