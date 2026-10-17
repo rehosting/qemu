@@ -3260,6 +3260,16 @@ static uint64_t aa64_dczid_read(CPUARMState *env, const ARMCPRegInfo *ri)
     return cpu->isar.idregs[DCZID_EL0_IDX] | dzp_bit;
 }
 
+static void sp_el0_write(CPUARMState *env, const ARMCPRegInfo *ri,
+                         uint64_t value)
+{
+    env->sp_el[0] = value;
+    /* a kernel address: Linux's current (CPUState.syscall_current) */
+    if (value >> 63) {
+        env_cpu(env)->syscall_current = value;
+    }
+}
+
 static CPAccessResult sp_el0_access(CPUARMState *env, const ARMCPRegInfo *ri,
                                     bool isread)
 {
@@ -3624,7 +3634,7 @@ static const ARMCPRegInfo v8_cp_reginfo[] = {
     { .name = "SP_EL0", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 0, .crn = 4, .crm = 1, .opc2 = 0,
       .access = PL1_RW, .accessfn = sp_el0_access,
-      .type = ARM_CP_ALIAS,
+      .type = ARM_CP_ALIAS, .writefn = sp_el0_write,
       .fieldoffset = offsetof(CPUARMState, sp_el[0]) },
     { .name = "SP_EL1", .state = ARM_CP_STATE_AA64,
       .opc0 = 3, .opc1 = 4, .crn = 4, .crm = 1, .opc2 = 0,

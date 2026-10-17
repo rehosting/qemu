@@ -574,6 +574,14 @@ struct CPUState {
      * whose registers the target can put back after an injected call.
      */
     uint32_t syscall_inject_abis;
+    /*
+     * The kernel's current task where the target can see it with no
+     * symbol, or 0: on AArch64 the last kernel address the kernel wrote to
+     * SP_EL0 at EL1 (Linux 4.10+ keeps current there in the kernel, and
+     * the last such write before a return to EL0 is the returning task's).
+     * See penguin_syscall_set_current_source().
+     */
+    uint64_t syscall_current;
 
     bool vcpu_dirty;
     AccelCPUState *accel;
