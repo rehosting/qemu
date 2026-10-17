@@ -23,6 +23,7 @@
 #include "qemu/timer.h"
 #include "qemu/log.h"
 #include "exec/page-vary.h"
+#include "exec/cputlb.h"
 #include "system/whpx.h"
 #include "target/arm/idau.h"
 #include "qemu/module.h"
