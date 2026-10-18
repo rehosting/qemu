@@ -343,7 +343,7 @@ static inline unsigned int aarch64_banked_spsr_index(unsigned int el)
 uint64_t arm_sc_key(CPUARMState *env);
 uint64_t arm_sc_percpu(CPUARMState *env);
 uint64_t arm_sc_usp(CPUARMState *env);
-uint32_t arm_sc_kmmu(void);
+uint32_t arm_sc_kmmu(CPUARMState *env);
 void arm_sc_return_aa32(CPUARMState *env);
 #endif
 

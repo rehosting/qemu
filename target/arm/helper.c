@@ -9509,8 +9509,13 @@ uint64_t arm_sc_usp(CPUARMState *env)
     return is_a64(env) ? env->xregs[31] : env->regs[13];
 }
 
-uint32_t arm_sc_kmmu(void)
+uint32_t arm_sc_kmmu(CPUARMState *env)
 {
+    /* a Secure AArch32 kernel runs at EL3: its regime is Secure PL1, not EL1 */
+    if (arm_is_secure_below_el3(env) && !arm_el_is_aa64(env, 3)) {
+        return (1u << arm_to_core_mmu_idx(ARMMMUIdx_E3)) |
+               (1u << arm_to_core_mmu_idx(ARMMMUIdx_E30_3_PAN));
+    }
     return (1u << arm_to_core_mmu_idx(ARMMMUIdx_E10_1)) |
            (1u << arm_to_core_mmu_idx(ARMMMUIdx_E10_1_PAN));
 }
@@ -9576,7 +9581,7 @@ static bool arm_sc_enter(CPUARMState *env)
         1u << SYSCALL_ABI_ARM;          /* an AArch32 kernel: EABI, not OABI */
     while ((r = syscall_trap_enter(env_cpu(env), abi, num, args, pc, len,
                                    arm_sc_key(env), arm_sc_usp(env),
-                                   arm_sc_percpu(env), arm_sc_kmmu(),
+                                   arm_sc_percpu(env), arm_sc_kmmu(env),
                                    &ret)) & SYSCALL_TRAP_FAULT) {
         /*
          * Take a data abort at the svc instead: back to it, still at EL0,
@@ -9635,7 +9640,7 @@ void arm_sc_return_aa32(CPUARMState *env)
         SyscallTrapRewind rw;
         int r = syscall_trap_return(env_cpu(env), env->regs[15],
                                     arm_sc_key(env), arm_sc_usp(env),
-                                    arm_sc_percpu(env), arm_sc_kmmu(), &ret,
+                                    arm_sc_percpu(env), arm_sc_kmmu(env), &ret,
                                     &rw);
 
         if ((r & SYSCALL_TRAP_REWIND) && rw.abi == SYSCALL_ABI_ARM) {

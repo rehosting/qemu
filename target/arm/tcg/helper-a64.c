@@ -768,7 +768,7 @@ void HELPER(exception_return)(CPUARMState *env, uint64_t new_pc)
         int r = syscall_trap_return(env_cpu(env),
                                     return_to_aa64 ? env->pc : env->regs[15],
                                     arm_sc_key(env), arm_sc_usp(env),
-                                    arm_sc_percpu(env), arm_sc_kmmu(), &ret,
+                                    arm_sc_percpu(env), arm_sc_kmmu(env), &ret,
                                     &rw);
 
         if ((r & SYSCALL_TRAP_REWIND) && return_to_aa64 &&
