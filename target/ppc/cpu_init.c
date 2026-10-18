@@ -25,6 +25,7 @@
 #include "system/cpus.h"
 #include "system/hw_accel.h"
 #include "system/tcg.h"
+#include "exec/cputlb.h"
 #include "cpu-models.h"
 #include "mmu-hash32.h"
 #include "mmu-hash64.h"
