@@ -22,6 +22,7 @@
 #include "cpu.h"
 #include "internal.h"
 #include "gdbstub/helpers.h"
+#include "exec/gdbstub.h"
 #include "fpu_helper.h"
 
 int mips_cpu_gdb_read_register(CPUState *cs, GByteArray *mem_buf, int n)
@@ -147,4 +148,43 @@ int mips_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
     }
 
     return regsz;
+}
+
+/*
+ * The core registers again as a register feature, for TCG plugins
+ * (qemu_plugin_get_registers lists only registers that belong to a feature,
+ * and MIPS has no core XML). gdb never sees it: without a core XML the
+ * stub sends gdb no target description, so gdb keeps its built-in layout.
+ * Numbering is the core one: r0-r31, sr, lo, hi, bad, cause, pc.
+ */
+static const char * const mips_plugin_reg_names[38] = {
+    "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
+    "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+    "r16", "r17", "r18", "r19", "r20", "r21", "r22", "r23",
+    "r24", "r25", "r26", "r27", "r28", "r29", "r30", "r31",
+    "sr", "lo", "hi", "bad", "cause", "pc",
+};
+
+static GDBFeature mips_plugin_regs_feature;
+
+void mips_cpu_register_plugin_regs(CPUState *cs)
+{
+    static gsize built;
+
+    if (g_once_init_enter(&built)) {
+        GDBFeatureBuilder builder;
+
+        gdb_feature_builder_init(&builder, &mips_plugin_regs_feature,
+                                 "org.qemu.mips.plugin-regs",
+                                 "mips-plugin-regs.xml", 0);
+        for (int i = 0; i < ARRAY_SIZE(mips_plugin_reg_names); i++) {
+            gdb_feature_builder_append_reg(&builder, mips_plugin_reg_names[i],
+                                           TARGET_LONG_BITS, i, "int", NULL);
+        }
+        gdb_feature_builder_end(&builder);
+        g_once_init_leave(&built, 1);
+    }
+    gdb_register_coprocessor(cs, mips_cpu_gdb_read_register,
+                             mips_cpu_gdb_write_register,
+                             &mips_plugin_regs_feature);
 }

@@ -487,6 +487,7 @@ static void mips_cpu_realizefn(DeviceState *dev, Error **errp)
         error_propagate(errp, local_err);
         return;
     }
+    mips_cpu_register_plugin_regs(cs);
 
     env->exception_base = (int32_t)0xBFC00000;
 
