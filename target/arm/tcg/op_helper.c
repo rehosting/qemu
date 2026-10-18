@@ -26,6 +26,9 @@
 #include "accel/tcg/probe.h"
 #include "cpregs.h"
 #include "system/penguin.h"
+#ifndef CONFIG_USER_ONLY
+#include "system/syscall-trap.h"
+#endif
 
 #define SIGNBIT (uint32_t)0x80000000
 #define SIGNBIT64 ((uint64_t)1 << 63)
@@ -617,6 +620,13 @@ void HELPER(cpsr_write_eret)(CPUARMState *env, uint32_t val)
     bql_lock();
     arm_call_el_change_hook(env_archcpu(env));
     bql_unlock();
+#ifndef CONFIG_USER_ONLY
+    /* an AArch32 kernel back to user mode: the syscall trap's return */
+    if ((env->uncached_cpsr & CPSR_M) == ARM_CPU_MODE_USR &&
+        !arm_el_is_aa64(env, 1) && syscall_trap_waiting()) {
+        arm_sc_return_aa32(env);
+    }
+#endif
 }
 
 /* Access to user mode registers from privileged modes.  */

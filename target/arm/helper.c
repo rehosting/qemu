@@ -9571,8 +9571,9 @@ static bool arm_sc_enter(CPUARMState *env)
      * An injected call's registers go back on the way out to EL0: AArch64's,
      * and an AArch32 task's when the kernel is AArch64 (helper-a64.c).
      */
-    env_cpu(env)->syscall_inject_abis = (1u << SYSCALL_ABI_AARCH64) |
-        (arm_el_is_aa64(env, 1) ? 1u << SYSCALL_ABI_ARM : 0);
+    env_cpu(env)->syscall_inject_abis = arm_el_is_aa64(env, 1) ?
+        (1u << SYSCALL_ABI_AARCH64) | (1u << SYSCALL_ABI_ARM) :
+        1u << SYSCALL_ABI_ARM;          /* an AArch32 kernel: EABI, not OABI */
     while ((r = syscall_trap_enter(env_cpu(env), abi, num, args, pc, len,
                                    arm_sc_key(env), arm_sc_usp(env),
                                    arm_sc_percpu(env), arm_sc_kmmu(),
@@ -9620,6 +9621,48 @@ static bool arm_sc_enter(CPUARMState *env)
         return true;
     }
     return false;
+}
+
+/*
+ * An AArch32 kernel's exception return to user mode (cpsr_write_eret: the
+ * PC and the user registers are in place): report it, and put back what an
+ * injection changed, as helper_exception_return does for AArch64 kernels.
+ */
+void arm_sc_return_aa32(CPUARMState *env)
+{
+    while (syscall_trap_waiting()) {
+        uint64_t ret = (uint32_t)env->regs[0];
+        SyscallTrapRewind rw;
+        int r = syscall_trap_return(env_cpu(env), env->regs[15],
+                                    arm_sc_key(env), arm_sc_usp(env),
+                                    arm_sc_percpu(env), arm_sc_kmmu(), &ret,
+                                    &rw);
+
+        if ((r & SYSCALL_TRAP_REWIND) && rw.abi == SYSCALL_ABI_ARM) {
+            /* an injected call is back: r7, r0-r5, back on the svc */
+            env->regs[7] = rw.num;
+            for (int i = 0; i < 6; i++) {
+                env->regs[i] = (uint32_t)rw.args[i];
+            }
+            env->regs[15] -= rw.len;
+            break;
+        }
+        if ((r & SYSCALL_TRAP_RESTORE) && rw.abi == SYSCALL_ABI_ARM) {
+            /* back from a call injected at the return: this call's registers */
+            env->regs[7] = rw.num;
+            for (int i = 1; i < 6; i++) {
+                env->regs[i] = (uint32_t)rw.args[i];
+            }
+        }
+        if (r & SYSCALL_TRAP_RET) {
+            env->regs[0] = (uint32_t)ret;
+        }
+        if (!(r & SYSCALL_TRAP_FAULT)) {
+            break;
+        }
+        /* the state is exact: the task is back in user mode */
+        syscall_trap_fault(env_cpu(env), 0);
+    }
 }
 
 void arm_cpu_do_interrupt(CPUState *cs)
